@@ -151,16 +151,30 @@ variable "dynu_hostname" {
   type        = string
 }
 
-variable "dynu_username" {
-  description = "Dynu account username (or the API-user for the hostname)."
+variable "dynu_api_key" {
+  description = <<-EOT
+    Dynu API key, from the API Credentials page of the control panel. Preferred
+    over username/password: it is revocable on its own, and it does not grant
+    control-panel access if the server is ever compromised. Uses Dynu's v2 REST
+    API rather than the legacy IP-update protocol.
+  EOT
   type        = string
   sensitive   = true
+  default     = ""
+}
+
+variable "dynu_username" {
+  description = "Dynu account username. Only used by the legacy IP-update protocol; leave empty when dynu_api_key is set."
+  type        = string
+  sensitive   = true
+  default     = ""
 }
 
 variable "dynu_password" {
-  description = "Dynu account password, or the IP-update password if you have set one."
+  description = "Dynu account password. Only used by the legacy IP-update protocol; leave empty when dynu_api_key is set."
   type        = string
   sensitive   = true
+  default     = ""
 }
 
 variable "dynu_update_interval" {

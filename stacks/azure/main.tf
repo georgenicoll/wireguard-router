@@ -21,6 +21,7 @@ module "node_config" {
   wireguard_nat         = var.wireguard_nat
 
   dynu_hostname        = var.dynu_hostname
+  dynu_api_key         = var.dynu_api_key
   dynu_username        = var.dynu_username
   dynu_password        = var.dynu_password
   dynu_update_interval = var.dynu_update_interval

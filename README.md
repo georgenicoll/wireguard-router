@@ -40,9 +40,9 @@ export WGR_STATE_DIR=~/private/wireguard-router-state   # keeps secrets out of t
 export LINODE_TOKEN=...                                 # cloud credentials
 ```
 
-The values you must fill in: `ssh_public_key`, `dynu_hostname`, `dynu_username`,
-`dynu_password`, and `region` (or the equivalent location setting for another
-provider). Everything else has a working default, including
+The values you must fill in: `ssh_public_key`, `dynu_hostname`, `dynu_api_key`,
+and `region` (or the equivalent location setting for another provider).
+Everything else has a working default, including
 non-default `ssh_port` (58022) and `wireguard_port` (47654). Leave the
 WireGuard key settings alone — step 5 generates them.
 
@@ -147,7 +147,8 @@ byte-for-byte identically configured.
 - [OpenTofu](https://opentofu.org/docs/intro/install/) >= 1.6
 - `wireguard-tools` locally, to generate keys (`sudo apt install wireguard-tools`)
 - An account with the cloud provider you intend to use
-- A Dynu account with a hostname created
+- A Dynu account with a hostname created, and an API key from
+  Control Panel -> API Credentials
 
 ## One-time setup
 
@@ -318,6 +319,49 @@ to be delivered to the machine. The key store does not change that — it just
 stops the key living in a file you hand-edit. Treat state as sensitively as the
 store itself, which is what `WGR_STATE_DIR` is for.
 
+## Dynu credentials
+
+Two authentication methods are supported. Set **one** of them; the plan fails
+if you set both or neither.
+
+### API key (recommended)
+
+```hcl
+dynu_api_key = "..."     # Control Panel -> API Credentials
+```
+
+This uses Dynu's v2 REST API. The updater resolves your hostname to its domain
+id via `GET /v2/dns/getroot/<hostname>`, reads the current domain object, and
+`POST`s it back with only `ipv4Address` changed — so TTL, IPv6, wildcard and
+DNSSEC settings are left exactly as they were. It needs `jq` on the server,
+which is installed for you.
+
+Prefer this. An API key is revocable independently of your password and cannot
+be used to log into the control panel, which matters because this credential
+lives on a disposable cloud VM.
+
+### Username and password (legacy)
+
+```hcl
+dynu_username = "..."
+dynu_password = "..."
+```
+
+This uses the older dyndns2 `/nic/update` endpoint, which **does not accept an
+API key** — that is the whole reason both paths exist. It is simpler and needs
+no `jq`, but the credential is your account password, so a leak exposes the
+whole account.
+
+### Caveat: hostnames below your own domain
+
+The API-key path manages a Dynu hostname *directly* (for example
+`yourname.freeddns.org`). If `dynu_hostname` is a sub-domain of a domain you
+own — `vpn.example.com` — then `getroot` resolves to `example.com`, and the
+address belongs on a record beneath it rather than on the domain itself. Rather
+than repoint the wrong name, the updater detects this and fails with an
+explanation. Use the username/password method for that case, since it updates
+by hostname.
+
 ## Switching cloud provider
 
 Change one word. The same config file drives every stack:
@@ -360,6 +404,11 @@ the server's WireGuard public key must stay the same, which it does as long as
 - Listens on a non-default UDP port
 
 **Dynamic DNS**
+- Authenticates with a Dynu **API key** against their v2 REST API. The key is
+  revocable on its own and, unlike your account password, does not grant
+  control-panel access if the server is compromised
+- Updates preserve the domain's other settings: the current record is read,
+  only the IPv4 address is changed, and the object is sent back
 - A systemd timer runs `/usr/local/sbin/dynu-update` every 5 minutes and at boot
 - The public IP is cached, so an unchanged address makes no API call, but an
   update is forced at least daily so the hostname is not reaped as stale

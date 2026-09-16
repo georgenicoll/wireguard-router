@@ -35,6 +35,11 @@ variable "wireguard_peers" {
 
 variable "dynu_hostname" { type = string }
 
+variable "dynu_api_key" {
+  type      = string
+  sensitive = true
+}
+
 variable "dynu_username" {
   type      = string
   sensitive = true

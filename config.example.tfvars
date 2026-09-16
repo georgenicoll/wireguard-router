@@ -47,9 +47,18 @@ wireguard_nat = true
 
 # --- Dynu dynamic DNS -------------------------------------------------------
 
-dynu_hostname        = "yourname.freeddns.org"
-dynu_username        = "your-dynu-username"
-dynu_password        = "your-dynu-password"
+dynu_hostname = "yourname.freeddns.org"
+
+# Authenticate with an API key, from Control Panel -> API Credentials.
+# Preferred over username/password: it can be revoked on its own, and it does
+# not grant control-panel access if this server is ever compromised.
+dynu_api_key = "your-dynu-api-key"
+
+# Alternative: the legacy IP-update protocol, which does not accept an API key.
+# Set these *instead of* dynu_api_key, never both.
+# dynu_username = "your-dynu-username"
+# dynu_password = "your-dynu-password"
+
 dynu_update_interval = "5min"
 
 # --- Provider selection -----------------------------------------------------
