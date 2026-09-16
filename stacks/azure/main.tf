@@ -7,7 +7,7 @@ module "node_config" {
   timezone  = var.timezone
 
   admin_username    = var.admin_username
-  ssh_public_key    = var.ssh_public_key
+  ssh_public_keys   = var.ssh_public_keys
   ssh_port          = var.ssh_port
   allowed_ssh_cidrs = var.allowed_ssh_cidrs
 
@@ -21,6 +21,7 @@ module "node_config" {
   wireguard_nat         = var.wireguard_nat
 
   dynu_hostname        = var.dynu_hostname
+  dynu_api_key         = var.dynu_api_key
   dynu_username        = var.dynu_username
   dynu_password        = var.dynu_password
   dynu_update_interval = var.dynu_update_interval
@@ -40,8 +41,8 @@ module "server" {
   tags              = var.tags
 
   # Azure requires these at VM-creation time rather than via cloud-init alone.
-  admin_username = var.admin_username
-  ssh_public_key = var.ssh_public_key
+  admin_username  = var.admin_username
+  ssh_public_keys = var.ssh_public_keys
 
   location = var.azure_location
   vm_size  = var.vm_size

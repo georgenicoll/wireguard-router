@@ -92,7 +92,11 @@ resource "aws_instance" "this" {
   # packets whose source address is not its own.
   source_dest_check = false
 
-  user_data                   = var.user_data
+  # EC2 has the same tight 16384-byte decoded limit as Linode, and a couple of
+  # site-to-site peers clears it easily. user_data_base64 (rather than plain
+  # user_data, which the provider would base64-encode as-is) lets us hand over
+  # pre-gzipped bytes; cloud-init auto-detects and decompresses them.
+  user_data_base64            = base64gzip(var.user_data)
   user_data_replace_on_change = true
 
   metadata_options {

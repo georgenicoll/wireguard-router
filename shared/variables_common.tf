@@ -31,13 +31,21 @@ variable "admin_username" {
   default     = "wgadmin"
 }
 
-variable "ssh_public_key" {
-  description = "OpenSSH public key authorised for the admin user (the full 'ssh-ed25519 AAAA... comment' line)."
-  type        = string
+variable "ssh_public_keys" {
+  description = "OpenSSH public keys authorised for the admin user (each the full 'ssh-ed25519 AAAA... comment' line). Add one entry per device or person that needs access."
+  type        = list(string)
 
   validation {
-    condition     = can(regex("^(ssh-ed25519|ssh-rsa|ecdsa-sha2-nistp256|sk-ssh-ed25519@openssh.com) ", trimspace(var.ssh_public_key)))
-    error_message = "ssh_public_key must be a valid OpenSSH public key line, not a file path or private key."
+    condition     = length(var.ssh_public_keys) > 0
+    error_message = "At least one ssh_public_keys entry is required - without it, nothing can log in."
+  }
+
+  validation {
+    condition = alltrue([
+      for k in var.ssh_public_keys :
+      can(regex("^(ssh-ed25519|ssh-rsa|ecdsa-sha2-nistp256|sk-ssh-ed25519@openssh.com) ", trimspace(k)))
+    ])
+    error_message = "Each ssh_public_keys entry must be a valid OpenSSH public key line, not a file path or private key."
   }
 }
 
@@ -87,6 +95,21 @@ variable "wireguard_address" {
   description = "Server address on the WireGuard tunnel, in CIDR form (e.g. 10.66.66.1/24)."
   type        = string
   default     = "10.66.66.1/24"
+}
+
+variable "wireguard_subnet" {
+  description = <<-EOT
+    Optional network for scripts/wg-peer.sh to treat as "the tunnel" when
+    computing wireguard_client_routes = "auto" and when checking a peer's
+    --lan against the tunnel for overlaps. Defaults to deriving this from
+    wireguard_address's own prefix (e.g. 10.66.66.1/24 -> 10.66.66.0/24).
+    Set this explicitly if you want a wider reserved range than the
+    interface's own mask - e.g. wireguard_address stays a /24 for the
+    interface itself, but wireguard_subnet reserves a /16 so future peers
+    can use a different /24 within it without redeclaring this setting.
+  EOT
+  type        = string
+  default     = ""
 }
 
 variable "wireguard_address_v6" {
@@ -144,6 +167,30 @@ variable "wireguard_nat" {
   default     = true
 }
 
+variable "wireguard_dns" {
+  description = <<-EOT
+    Default DNS server handed to peers in their client config, e.g. a
+    resolver reachable through one peer's routed LAN. Empty means no
+    network-wide default; scripts/wg-peer.sh falls back to a public resolver
+    unless a peer has its own override (see wg-peer.sh add --dns).
+  EOT
+  type        = string
+  default     = ""
+}
+
+variable "wireguard_client_routes" {
+  description = <<-EOT
+    Default client-side AllowedIPs handed to peers in their client config.
+    "auto" computes the tunnel network plus every other peer's own address
+    and LAN subnet (see scripts/wg-peer.sh), so a mesh of site-to-site peers
+    can reach each other without also routing general internet traffic
+    through the server. A literal CIDR list is used as-is. Empty means full
+    tunnel: "0.0.0.0/0, ::/0". Overridden per invocation by WGR_CLIENT_ROUTES.
+  EOT
+  type        = string
+  default     = ""
+}
+
 # --- Dynu dynamic DNS -------------------------------------------------------
 
 variable "dynu_hostname" {
@@ -151,16 +198,30 @@ variable "dynu_hostname" {
   type        = string
 }
 
-variable "dynu_username" {
-  description = "Dynu account username (or the API-user for the hostname)."
+variable "dynu_api_key" {
+  description = <<-EOT
+    Dynu API key, from the API Credentials page of the control panel. Preferred
+    over username/password: it is revocable on its own, and it does not grant
+    control-panel access if the server is ever compromised. Uses Dynu's v2 REST
+    API rather than the legacy IP-update protocol.
+  EOT
   type        = string
   sensitive   = true
+  default     = ""
+}
+
+variable "dynu_username" {
+  description = "Dynu account username. Only used by the legacy IP-update protocol; leave empty when dynu_api_key is set."
+  type        = string
+  sensitive   = true
+  default     = ""
 }
 
 variable "dynu_password" {
-  description = "Dynu account password, or the IP-update password if you have set one."
+  description = "Dynu account password. Only used by the legacy IP-update protocol; leave empty when dynu_api_key is set."
   type        = string
   sensitive   = true
+  default     = ""
 }
 
 variable "dynu_update_interval" {

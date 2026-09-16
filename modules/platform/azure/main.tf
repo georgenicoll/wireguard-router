@@ -106,9 +106,12 @@ resource "azurerm_linux_virtual_machine" "this" {
 
   disable_password_authentication = true
 
-  admin_ssh_key {
-    username   = var.admin_username
-    public_key = trimspace(var.ssh_public_key)
+  dynamic "admin_ssh_key" {
+    for_each = toset(var.ssh_public_keys)
+    content {
+      username   = var.admin_username
+      public_key = trimspace(admin_ssh_key.value)
+    }
   }
 
   custom_data = base64encode(var.user_data)

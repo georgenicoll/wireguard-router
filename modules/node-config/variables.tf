@@ -6,7 +6,7 @@ variable "node_name" { type = string }
 variable "timezone" { type = string }
 
 variable "admin_username" { type = string }
-variable "ssh_public_key" { type = string }
+variable "ssh_public_keys" { type = list(string) }
 variable "ssh_port" { type = number }
 variable "allowed_ssh_cidrs" { type = list(string) }
 
@@ -34,6 +34,11 @@ variable "wireguard_peers" {
 }
 
 variable "dynu_hostname" { type = string }
+
+variable "dynu_api_key" {
+  type      = string
+  sensitive = true
+}
 
 variable "dynu_username" {
   type      = string

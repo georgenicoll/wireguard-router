@@ -5,6 +5,7 @@ locals {
     "curl",
     "ca-certificates",
     "iptables",
+    "jq",
     "ufw",
     "fail2ban",
     "unattended-upgrades",
@@ -36,6 +37,7 @@ locals {
 
   # The credentials land in a shell-sourced env file inside single quotes, so a
   # literal quote in either value has to be escaped the POSIX way ('\'').
+  dynu_api_key_sh  = replace(var.dynu_api_key, "'", "'\\''")
   dynu_username_sh = replace(var.dynu_username, "'", "'\\''")
   dynu_password_sh = replace(var.dynu_password, "'", "'\\''")
 
@@ -44,7 +46,7 @@ locals {
     dynu_hostname     = var.dynu_hostname
     timezone          = var.timezone
     admin_username    = var.admin_username
-    ssh_public_key    = trimspace(var.ssh_public_key)
+    ssh_public_keys   = [for k in var.ssh_public_keys : trimspace(k)]
     ssh_port          = var.ssh_port
     allowed_ssh_cidrs = var.allowed_ssh_cidrs
     packages          = local.packages
@@ -55,6 +57,7 @@ locals {
     wg_nat_script_b64    = base64encode(local.wg_nat_script)
 
     dynu_script_b64      = base64encode(local.dynu_script)
+    dynu_api_key_sh      = local.dynu_api_key_sh
     dynu_username_sh     = local.dynu_username_sh
     dynu_password_sh     = local.dynu_password_sh
     dynu_update_interval = var.dynu_update_interval

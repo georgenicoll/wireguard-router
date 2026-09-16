@@ -1,6 +1,15 @@
 #!/bin/sh
 # Register this host's current public IP with Dynu dynamic DNS.
 #
+# Two authentication methods are supported, chosen by what is present in the
+# credentials file:
+#
+#   DYNU_API_KEY                  -> Dynu's v2 REST API (preferred). The key is
+#                                    revocable on its own and does not grant
+#                                    control-panel access.
+#   DYNU_USERNAME + DYNU_PASSWORD -> the legacy dyndns2 IP-update protocol,
+#                                    which does not accept an API key.
+#
 # Runs from a systemd timer. The public IP is cached so that an unchanged
 # address does not generate an update on every tick, but an update is forced
 # at least once a day to stop the hostname being reaped as stale.
@@ -11,6 +20,7 @@ ENV_FILE="/etc/dynu/dynu.env"
 STATE_DIR="/var/lib/dynu"
 STATE_FILE="$STATE_DIR/last_ip"
 MAX_AGE_SECONDS=86400
+API="https://api.dynu.com/v2/dns"
 
 log() { echo "dynu-update: $*"; }
 
@@ -21,14 +31,20 @@ fi
 # shellcheck disable=SC1090
 . "$ENV_FILE"
 
-if [ -z "$${DYNU_USERNAME:-}" ] || [ -z "$${DYNU_PASSWORD:-}" ]; then
-    log "DYNU_USERNAME / DYNU_PASSWORD are not set in $ENV_FILE"
+USE_API_KEY=0
+if [ -n "$${DYNU_API_KEY:-}" ]; then
+    USE_API_KEY=1
+    command -v jq >/dev/null 2>&1 || { log "jq is required for the API-key method"; exit 1; }
+elif [ -n "$${DYNU_USERNAME:-}" ] && [ -n "$${DYNU_PASSWORD:-}" ]; then
+    USE_API_KEY=0
+else
+    log "no credentials in $ENV_FILE: set DYNU_API_KEY, or DYNU_USERNAME and DYNU_PASSWORD"
     exit 1
 fi
 
 mkdir -p "$STATE_DIR"
 
-# Discover the public IP, falling back between providers.
+# --- Discover the public IP, falling back between providers -----------------
 IP=""
 for URL in https://api.ipify.org https://ipv4.icanhazip.com https://checkip.amazonaws.com; do
     IP=$(curl -fsS --max-time 15 "$URL" 2>/dev/null | tr -d ' \t\r\n') || IP=""
@@ -43,7 +59,7 @@ if [ -z "$IP" ]; then
     exit 1
 fi
 
-# Skip the API call when nothing has changed and the last update is recent.
+# Skip the update entirely when nothing has changed and the last one is recent.
 if [ -f "$STATE_FILE" ] && [ "$(cat "$STATE_FILE")" = "$IP" ]; then
     AGE=$(( $(date +%s) - $(stat -c %Y "$STATE_FILE") ))
     if [ "$AGE" -lt "$MAX_AGE_SECONDS" ]; then
@@ -52,22 +68,109 @@ if [ -f "$STATE_FILE" ] && [ "$(cat "$STATE_FILE")" = "$IP" ]; then
     fi
 fi
 
-RESPONSE=$(curl -fsS --max-time 30 \
-    --user "$DYNU_USERNAME:$DYNU_PASSWORD" \
-    --data-urlencode "hostname=$FQDN" \
-    --data-urlencode "myip=$IP" \
-    --get "https://api.dynu.com/nic/update") || {
-    log "update request for $FQDN failed"
-    exit 1
+# --- Method 1: v2 REST API with an API key ----------------------------------
+api_call() {
+    # api_call <method> <path> [body]
+    if [ -n "$${3:-}" ]; then
+        curl -sS --max-time 30 -X "$1" \
+            -H "accept: application/json" \
+            -H "Content-Type: application/json" \
+            -H "API-Key: $DYNU_API_KEY" \
+            -d "$3" \
+            "$API$2"
+    else
+        curl -sS --max-time 30 -X "$1" \
+            -H "accept: application/json" \
+            -H "API-Key: $DYNU_API_KEY" \
+            "$API$2"
+    fi
 }
 
-case "$RESPONSE" in
-good*|nochg*)
-    printf '%s' "$IP" > "$STATE_FILE"
-    log "$FQDN -> $IP ($RESPONSE)"
-    ;;
-*)
-    log "Dynu rejected the update for $FQDN: $RESPONSE"
-    exit 1
-    ;;
-esac
+update_via_api() {
+    root_json=$(api_call GET "/getroot/$FQDN") ||
+        { log "getroot request failed for $FQDN"; return 1; }
+
+    domain_id=$(printf '%s' "$root_json" | jq -r '.id // empty')
+    domain_name=$(printf '%s' "$root_json" | jq -r '.domainName // empty')
+
+    if [ -z "$domain_id" ]; then
+        log "could not resolve $FQDN to a Dynu domain id: $root_json"
+        return 1
+    fi
+
+    # getroot returns the *root* domain. If our hostname sits below it, the
+    # address belongs on a record rather than on the domain itself, and
+    # updating the domain would repoint the wrong name.
+    if [ "$domain_name" != "$FQDN" ]; then
+        log "$FQDN is a sub-domain of '$domain_name' (id $domain_id)."
+        log "The API-key method manages a Dynu hostname directly, not a record"
+        log "beneath your own domain. Use DYNU_USERNAME/DYNU_PASSWORD instead,"
+        log "which updates by hostname, or point dynu_hostname at the domain"
+        log "itself if updating '$domain_name' is what you actually want."
+        return 1
+    fi
+
+    current=$(api_call GET "/$domain_id") ||
+        { log "could not read domain $domain_id"; return 1; }
+
+    # Send the existing object back with only the IPv4 address changed, so
+    # unrelated settings (TTL, IPv6, wildcards, DNSSEC) are preserved.
+    #
+    # Booleans are copied with an explicit null test: jq's // operator treats
+    # false as empty and would silently flip a disabled flag to true.
+    body=$(printf '%s' "$current" | jq -c --arg ip "$IP" '{
+        name,
+        group: (.group // ""),
+        ipv4Address: $ip,
+        ipv6Address: (.ipv6Address // ""),
+        ttl: (if .ttl == null then 120 else .ttl end),
+        ipv4: true,
+        ipv6: (if .ipv6 == null then false else .ipv6 end),
+        ipv4WildcardAlias: (if .ipv4WildcardAlias == null then false else .ipv4WildcardAlias end),
+        ipv6WildcardAlias: (if .ipv6WildcardAlias == null then false else .ipv6WildcardAlias end),
+        allowZoneTransfer: (if .allowZoneTransfer == null then false else .allowZoneTransfer end),
+        dnssec: (if .dnssec == null then false else .dnssec end)
+    }') || { log "could not build the update payload from: $current"; return 1; }
+
+    result=$(api_call POST "/$domain_id" "$body") ||
+        { log "update request failed for $FQDN"; return 1; }
+
+    status=$(printf '%s' "$result" | jq -r '.statusCode // empty')
+    if [ "$status" = "200" ]; then
+        log "$FQDN -> $IP (api v2, domain id $domain_id)"
+        return 0
+    fi
+
+    log "Dynu rejected the update for $FQDN: $result"
+    return 1
+}
+
+# --- Method 2: legacy dyndns2 IP-update protocol ----------------------------
+update_via_dyndns2() {
+    response=$(curl -fsS --max-time 30 \
+        --user "$DYNU_USERNAME:$DYNU_PASSWORD" \
+        --data-urlencode "hostname=$FQDN" \
+        --data-urlencode "myip=$IP" \
+        --get "https://api.dynu.com/nic/update") ||
+        { log "update request for $FQDN failed"; return 1; }
+
+    case "$response" in
+    good* | nochg*)
+        log "$FQDN -> $IP ($response)"
+        return 0
+        ;;
+    *)
+        log "Dynu rejected the update for $FQDN: $response"
+        return 1
+        ;;
+    esac
+}
+
+if [ "$USE_API_KEY" -eq 1 ]; then
+    update_via_api || exit 1
+else
+    update_via_dyndns2 || exit 1
+fi
+
+# Only cached after a confirmed success, so a failure is always retried.
+printf '%s' "$IP" > "$STATE_FILE"

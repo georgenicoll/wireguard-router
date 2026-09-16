@@ -12,6 +12,10 @@
 #
 # Configuration:
 #   WGR_CONFIG     path to your private .tfvars file (required for plan/apply/destroy)
+#   WGR_KEYS       optional key store location, managed by scripts/wg-peer.sh.
+#                  Defaults to <dir of WGR_CONFIG>/wireguard-router-keys. When
+#                  it contains wireguard.generated.tfvars, that file is passed
+#                  to tofu as well, supplying the WireGuard keys and peers.
 #   WGR_STATE_DIR  optional directory to keep state in, instead of the stack
 #                  directory. State contains your WireGuard private key and
 #                  Dynu password, so a private, backed-up location is sensible.
@@ -73,6 +77,22 @@ MSG
     fi
     # Absolute, because -chdir changes how relative paths resolve.
     ARGS+=("-var-file=$CONFIG_PATH")
+
+    # The key store's generated tfvars supplies wireguard_private_key and
+    # wireguard_peers. It is passed *after* the main config so that its values
+    # win, and it is optional: without it you can still set those by hand.
+    STORE="${WGR_KEYS:-$(dirname "$CONFIG_PATH")/wireguard-router-keys}"
+    GENERATED="$STORE/wireguard.generated.tfvars"
+    if [[ -r "$GENERATED" ]]; then
+        ARGS+=("-var-file=$GENERATED")
+        # Values in the main config would be silently overridden, which is
+        # confusing enough to be worth calling out.
+        if grep -qE '^[[:space:]]*(wireguard_private_key|wireguard_peers)[[:space:]]*=' "$CONFIG_PATH"; then
+            echo "warning: $(basename "$CONFIG_PATH") sets wireguard_private_key or" >&2
+            echo "         wireguard_peers, but the generated key store file takes" >&2
+            echo "         precedence. Remove them from your config to avoid confusion." >&2
+        fi
+    fi
     ;;
 esac
 
