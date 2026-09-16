@@ -61,15 +61,20 @@ the server takes `.1`:
 
 Give every peer its own address. The script refuses duplicates.
 
-**5. Generate the server key and your peers.** One command per device:
+**5. Generate the server key and your peers.** There is no separate step for
+the server key — the very first `./scripts/wg-peer.sh add` creates it
+automatically, alongside that peer's key, and every `add` after that reuses
+it. One command per device:
 
 ```bash
-./scripts/wg-peer.sh add laptop 10.66.66.2
+./scripts/wg-peer.sh add laptop 10.66.66.2   # also creates the server key, since none exists yet
 ./scripts/wg-peer.sh add phone  10.66.66.3
 ```
 
 Each prints a ready-to-use client config, and writes the keys into the store
-beside your config file. The server key is created once, on the first `add`.
+beside your config file. See
+[Generating WireGuard configuration](#generating-wireguard-configuration) for
+what the store looks like and why the server key is never rotated by `add`.
 
 **6. Create the server.**
 
