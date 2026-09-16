@@ -357,6 +357,23 @@ effective_dns() {
     printf '1.1.1.1'
 }
 
+# The tunnel network plus every *other* peer's own_ip and lan_subnet - what a
+# peer needs in its AllowedIPs to reach every other peer and every routed LAN,
+# without routing its general internet traffic through the server too. Used
+# by WGR_CLIENT_ROUTES=auto. Recomputed fresh each time, so it never goes
+# stale as peers are added, removed or updated.
+derive_auto_routes() {
+    local exclude="$1" name own lan
+    derive_tunnel_network
+    while IFS= read -r name; do
+        [[ -z "$name" || "$name" == "$exclude" ]] && continue
+        own="$(peer_own_ip "$name")"
+        [[ -n "$own" ]] && printf '%s\n' "$own"
+        lan="$(peer_lan_subnet "$name")"
+        [[ -n "$lan" ]] && printf '%s\n' "$lan"
+    done < <(peer_names)
+}
+
 print_client_config() {
     local name="$1" dir="$PEERS_DIR/$1" endpoint own lan
     [[ -d "$dir" ]] || die "no such peer: $name (see '$PROG list')"
@@ -376,7 +393,13 @@ print_client_config() {
     echo "PublicKey = $(server_pubkey)"
     [[ -s "$dir/preshared.key" ]] && echo "PresharedKey = $(cat "$dir/preshared.key")"
     echo "Endpoint = $endpoint"
-    echo "AllowedIPs = ${WGR_CLIENT_ROUTES:-0.0.0.0/0, ::/0}"
+    local routes
+    if [[ "${WGR_CLIENT_ROUTES:-}" == "auto" ]]; then
+        routes="$(derive_auto_routes "$name" | sort -u | paste -sd, - | sed 's/,/, /g')"
+    else
+        routes="${WGR_CLIENT_ROUTES:-0.0.0.0/0, ::/0}"
+    fi
+    echo "AllowedIPs = $routes"
     echo "PersistentKeepalive = 25"
 
     lan="$(peer_lan_subnet "$name")"

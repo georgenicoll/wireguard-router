@@ -201,7 +201,7 @@ export LINODE_TOKEN=...   # or set linode_token in your config file
 | `WGR_KEYS` | Key store location. Defaults to `wireguard-router-keys` beside `WGR_CONFIG`. |
 | `WGR_STATE_DIR` | Keep state outside the repo, one file per platform. Recommended. |
 | `WGR_ENDPOINT` | Override the `Endpoint` written into client configs. |
-| `WGR_CLIENT_ROUTES` | Override client `AllowedIPs`. Default `0.0.0.0/0, ::/0` (full tunnel). |
+| `WGR_CLIENT_ROUTES` | Override client `AllowedIPs`. `auto` computes mesh routes; default is `0.0.0.0/0, ::/0` (full tunnel). |
 | `WGR_CLIENT_DNS` | Ad-hoc override for one `client` printout, outranking a peer's own `--dns` and `wireguard_dns` - see [DNS](#dns). |
 
 Worth putting the first three in your shell profile or a direnv `.envrc`.
@@ -391,6 +391,22 @@ Any other peer that needs to reach hosts on it must also list that subnet in
 its own client-side `AllowedIPs` (`WGR_CLIENT_ROUTES` above) — otherwise its
 OS never routes that traffic into the tunnel in the first place. `add`/`update`
 print a reminder of this whenever a peer has a `--lan`.
+
+For a mesh of several site-to-site peers, working this out by hand for every
+peer gets old fast, and it goes stale the moment a peer is added or changed.
+`WGR_CLIENT_ROUTES=auto` computes it instead: the tunnel network plus every
+*other* peer's own address and LAN, freshly read from the store each time —
+so every peer can reach every other peer and every routed LAN, without
+routing that peer's general internet traffic through the server too.
+
+```bash
+WGR_CLIENT_ROUTES=auto ./scripts/wg-peer.sh client router
+```
+
+Run that (or add `--lan`'s reminder to your muscle memory) once per peer
+whenever the mesh changes shape, and reprint each client's config. A plain
+address or address list still works as a literal override, same as before —
+`auto` is only special-cased for that exact string.
 
 ### A note on secrets
 
