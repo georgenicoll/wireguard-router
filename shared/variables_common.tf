@@ -97,6 +97,21 @@ variable "wireguard_address" {
   default     = "10.66.66.1/24"
 }
 
+variable "wireguard_subnet" {
+  description = <<-EOT
+    Optional network for scripts/wg-peer.sh to treat as "the tunnel" when
+    computing wireguard_client_routes = "auto" and when checking a peer's
+    --lan against the tunnel for overlaps. Defaults to deriving this from
+    wireguard_address's own prefix (e.g. 10.66.66.1/24 -> 10.66.66.0/24).
+    Set this explicitly if you want a wider reserved range than the
+    interface's own mask - e.g. wireguard_address stays a /24 for the
+    interface itself, but wireguard_subnet reserves a /16 so future peers
+    can use a different /24 within it without redeclaring this setting.
+  EOT
+  type        = string
+  default     = ""
+}
+
 variable "wireguard_address_v6" {
   description = "Optional IPv6 address for the tunnel (e.g. fd66:66:66::1/64). Empty disables tunnel IPv6."
   type        = string

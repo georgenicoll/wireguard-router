@@ -37,6 +37,13 @@ wireguard_port = 47654
 
 wireguard_address = "10.66.66.1/24"
 
+# Optional: only needed if you want "auto" client routes (below) to cover a
+# wider range than wireguard_address's own /prefix - e.g. reserving a /16 so
+# future peers can use a different /24 within it without changing this file.
+# Leave unset to just derive it from wireguard_address, which is almost
+# always what you want.
+# wireguard_subnet = "10.66.0.0/16"
+
 # Route peers' general internet traffic out through the server.
 wireguard_nat = true
 

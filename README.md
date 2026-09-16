@@ -406,14 +406,27 @@ whenever a peer has a `--lan`.
 
 For a mesh of several site-to-site peers, working this out by hand for every
 peer gets old fast, and it goes stale the moment a peer is added or changed.
-`auto` computes it instead: the tunnel network plus every *other* peer's own
-address and LAN, freshly read from the store each time — so every peer can
-reach every other peer and every routed LAN, without routing that peer's
-general internet traffic through the server too. Setting
-`wireguard_client_routes = "auto"` once in your config file applies it to
+`auto` computes it instead: the tunnel network (`wireguard_subnet`, or
+derived from `wireguard_address` if that is unset) plus every *other* peer's
+routed LAN, freshly read from the store each time — so every peer can reach
+every other peer and every routed LAN, without routing that peer's general
+internet traffic through the server too. A peer's own address is only listed
+individually when it falls outside the tunnel network; normally the tunnel
+network entry already covers it, which is what makes a **new peer within
+that network** reachable from already-printed, already-installed client
+configs with no changes to them at all — only a **new LAN subnet** requires
+reprinting other peers' configs to pick it up. Setting
+`wireguard_client_routes = "auto"` once in your config file applies this to
 every peer's client config from then on, so you don't have to remember
-`WGR_CLIENT_ROUTES=auto` per peer per invocation — reprint each client's
-config (and update the device) whenever the mesh's shape changes.
+`WGR_CLIENT_ROUTES=auto` per peer per invocation.
+
+If your tunnel's own `/prefix` (`wireguard_address`) is narrower than the
+range you want "auto" to treat as home turf — for instance you want to add
+more /24s later without editing this setting each time — set
+`wireguard_subnet` to the wider range explicitly (e.g. `10.66.0.0/16`). It is
+also what a peer's `--lan` is checked against for overlap, so a LAN subnet
+colliding with that wider reservation is refused just as it would be against
+`wireguard_address` alone.
 
 ### A note on secrets
 

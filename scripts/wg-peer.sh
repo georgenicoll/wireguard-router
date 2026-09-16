@@ -120,6 +120,19 @@ sys.exit(0 if a.overlaps(b) else 1)
 " "$1" "$2"
 }
 
+# True (exit 0) if $2 is fully contained within $1. Used to skip a peer's own
+# address in "auto" routes when the tunnel subnet already covers it, while
+# still listing it explicitly on the rare peer whose own_ip falls outside
+# that subnet (allowed, since add/update never enforce it be inside).
+cidr_contains() {
+    python3 -c "
+import ipaddress, sys
+outer = ipaddress.ip_network(sys.argv[1], strict=False)
+inner = ipaddress.ip_network(sys.argv[2], strict=False)
+sys.exit(0 if inner.subnet_of(outer) else 1)
+" "$1" "$2" 2>/dev/null
+}
+
 
 # Normalise a peer's own tunnel address: must be exactly one host, so an
 # explicit prefix shorter than full length is rejected rather than silently
@@ -198,7 +211,9 @@ peer_allowed_ips() {
     [[ -n "$own" ]] || die "peer '$name' has no own_ip (old-format peer?). Fix with: $PROG update $name --ip <address>"
     printf '%s\n' "$own"
     lan="$(peer_lan_subnet "$name")"
-    [[ -n "$lan" ]] && printf '%s\n' "$lan"
+    if [[ -n "$lan" ]]; then
+        printf '%s\n' "$lan"
+    fi
 }
 
 # Pull a value out of your main config file by variable name. Used for the
@@ -226,11 +241,18 @@ derive_endpoint() {
     fi
 }
 
-# The tunnel's own network (wireguard_address in your config, defaulting to
-# match the tofu variable), used to warn if a peer's own_ip looks unrelated to
-# it, and to refuse a LAN subnet that collides with the tunnel itself.
+# The network treated as "the tunnel": wireguard_subnet if set explicitly,
+# else derived from wireguard_address's own prefix (matching the tofu
+# variable defaults). Used to refuse a --lan that collides with the tunnel,
+# and as the "auto" route that covers every peer within it without needing
+# each one's own address listed separately.
 derive_tunnel_network() {
-    local addr
+    local subnet addr
+    subnet="$(config_value wireguard_subnet)"
+    if [[ -n "$subnet" ]]; then
+        canonical_network "$subnet"
+        return
+    fi
     addr="$(config_value wireguard_address)"
     [[ -z "$addr" ]] && addr="10.66.66.1/24" # matches the variable default
     canonical_network "$addr"
@@ -281,7 +303,7 @@ check_no_overlap() {
     if [[ "$kind" == "lan_subnet" ]]; then
         tunnel="$(derive_tunnel_network)"
         cidr_overlaps "$candidate" "$tunnel" &&
-            die "$candidate overlaps the tunnel network $tunnel (wireguard_address); a LAN subnet cannot include tunnel addresses"
+            die "$candidate overlaps the tunnel network $tunnel (wireguard_subnet or wireguard_address); a LAN subnet cannot include tunnel addresses"
     fi
     return 0
 }
@@ -363,20 +385,32 @@ effective_dns() {
     printf '1.1.1.1'
 }
 
-# The tunnel network plus every *other* peer's own_ip and lan_subnet - what a
-# peer needs in its AllowedIPs to reach every other peer and every routed LAN,
-# without routing its general internet traffic through the server too. Used
-# by WGR_CLIENT_ROUTES=auto. Recomputed fresh each time, so it never goes
-# stale as peers are added, removed or updated.
+# The tunnel network plus every *other* peer's routed LAN - what a peer needs
+# in its AllowedIPs to reach every other peer and every routed LAN, without
+# routing its general internet traffic through the server too. Used by
+# wireguard_client_routes = "auto". Recomputed fresh each time, so it never
+# goes stale as peers are added, removed or updated - including a peer added
+# *after* this is printed, as long as its own_ip falls within the tunnel
+# network: that's already covered by the tunnel-network entry below, so it
+# needs no reprint of anyone else's config.
+#
+# A peer's own_ip is only listed individually when it falls *outside* the
+# tunnel network - unusual, but add/update never forbid it - since then the
+# tunnel-network entry alone would not route to it.
 derive_auto_routes() {
-    local exclude="$1" name own lan
-    derive_tunnel_network
+    local exclude="$1" tunnel name own lan
+    tunnel="$(derive_tunnel_network)"
+    printf '%s\n' "$tunnel"
     while IFS= read -r name; do
         [[ -z "$name" || "$name" == "$exclude" ]] && continue
         own="$(peer_own_ip "$name")"
-        [[ -n "$own" ]] && printf '%s\n' "$own"
+        if [[ -n "$own" ]] && ! cidr_contains "$tunnel" "$own"; then
+            printf '%s\n' "$own"
+        fi
         lan="$(peer_lan_subnet "$name")"
-        [[ -n "$lan" ]] && printf '%s\n' "$lan"
+        if [[ -n "$lan" ]]; then
+            printf '%s\n' "$lan"
+        fi
     done < <(peer_names)
 }
 
