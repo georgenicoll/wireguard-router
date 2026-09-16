@@ -75,11 +75,20 @@ it. One command per device:
 ./scripts/wg-peer.sh add phone  10.66.66.3
 ```
 
+If a peer is a router gatewaying a whole LAN rather than a single device, add
+`--lan <subnet>` with that LAN's *real* subnet — not a wider mask on the
+peer's own address (see [Two kinds of peer](#two-kinds-of-peer) for why that
+distinction matters):
+
+```bash
+./scripts/wg-peer.sh add router 10.66.66.4 --lan 192.168.1.0/24
+```
+
 Each prints a ready-to-use client config, and writes the keys into the store
 beside your config file. See
 [Generating WireGuard configuration](#generating-wireguard-configuration) for
 what the store looks like, why the server key is never rotated by `add`, and
-how to add a router that gateways a whole LAN instead of a single device.
+how peers reach a router's LAN once one exists.
 
 **6. Create the server.**
 
