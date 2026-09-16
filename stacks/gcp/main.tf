@@ -7,7 +7,7 @@ module "node_config" {
   timezone  = var.timezone
 
   admin_username    = var.admin_username
-  ssh_public_key    = var.ssh_public_key
+  ssh_public_keys   = var.ssh_public_keys
   ssh_port          = var.ssh_port
   allowed_ssh_cidrs = var.allowed_ssh_cidrs
 

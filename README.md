@@ -26,7 +26,7 @@ key-based login only, so without this you cannot get in.
 
 ```bash
 ssh-keygen -t ed25519 -C "wireguard-router"
-cat ~/.ssh/id_ed25519.pub                 # paste into ssh_public_key in step 3
+cat ~/.ssh/id_ed25519.pub                 # add to ssh_public_keys in step 3
 ```
 
 **3. Create your config file and point the tooling at it.**
@@ -40,7 +40,7 @@ export WGR_STATE_DIR=~/private/wireguard-router-state   # keeps secrets out of t
 export LINODE_TOKEN=...                                 # cloud credentials
 ```
 
-The values you must fill in: `ssh_public_key`, `dynu_hostname`, `dynu_api_key`,
+The values you must fill in: `ssh_public_keys`, `dynu_hostname`, `dynu_api_key`,
 and `region` (or the equivalent location setting for another provider).
 Everything else has a working default, including
 non-default `ssh_port` (58022) and `wireguard_port` (47654). Leave the

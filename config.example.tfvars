@@ -17,8 +17,12 @@ timezone  = "Europe/London"
 
 admin_username = "wgadmin"
 
-# The public half of the key you will SSH with. Password login is disabled.
-ssh_public_key = "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAI... you@yourmachine"
+# The public half of the key(s) you will SSH with. Password login is disabled.
+# Add one entry per device or person that needs access.
+ssh_public_keys = [
+  "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAI... you@yourmachine",
+  # "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAI... you@laptop",
+]
 
 # Non-default port; sshd will not be reachable on 22.
 ssh_port = 58022

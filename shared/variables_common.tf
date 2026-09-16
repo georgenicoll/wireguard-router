@@ -31,13 +31,21 @@ variable "admin_username" {
   default     = "wgadmin"
 }
 
-variable "ssh_public_key" {
-  description = "OpenSSH public key authorised for the admin user (the full 'ssh-ed25519 AAAA... comment' line)."
-  type        = string
+variable "ssh_public_keys" {
+  description = "OpenSSH public keys authorised for the admin user (each the full 'ssh-ed25519 AAAA... comment' line). Add one entry per device or person that needs access."
+  type        = list(string)
 
   validation {
-    condition     = can(regex("^(ssh-ed25519|ssh-rsa|ecdsa-sha2-nistp256|sk-ssh-ed25519@openssh.com) ", trimspace(var.ssh_public_key)))
-    error_message = "ssh_public_key must be a valid OpenSSH public key line, not a file path or private key."
+    condition     = length(var.ssh_public_keys) > 0
+    error_message = "At least one ssh_public_keys entry is required - without it, nothing can log in."
+  }
+
+  validation {
+    condition = alltrue([
+      for k in var.ssh_public_keys :
+      can(regex("^(ssh-ed25519|ssh-rsa|ecdsa-sha2-nistp256|sk-ssh-ed25519@openssh.com) ", trimspace(k)))
+    ])
+    error_message = "Each ssh_public_keys entry must be a valid OpenSSH public key line, not a file path or private key."
   }
 }
 

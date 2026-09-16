@@ -18,7 +18,7 @@ variable "tags" {
 # Azure's VM resource requires the admin user and key up front, rather than
 # leaving both entirely to cloud-init as the other platforms do.
 variable "admin_username" { type = string }
-variable "ssh_public_key" { type = string }
+variable "ssh_public_keys" { type = list(string) }
 
 # --- Azure specific ---------------------------------------------------------
 

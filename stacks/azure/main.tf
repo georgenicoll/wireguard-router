@@ -7,7 +7,7 @@ module "node_config" {
   timezone  = var.timezone
 
   admin_username    = var.admin_username
-  ssh_public_key    = var.ssh_public_key
+  ssh_public_keys   = var.ssh_public_keys
   ssh_port          = var.ssh_port
   allowed_ssh_cidrs = var.allowed_ssh_cidrs
 
@@ -41,8 +41,8 @@ module "server" {
   tags              = var.tags
 
   # Azure requires these at VM-creation time rather than via cloud-init alone.
-  admin_username = var.admin_username
-  ssh_public_key = var.ssh_public_key
+  admin_username  = var.admin_username
+  ssh_public_keys = var.ssh_public_keys
 
   location = var.azure_location
   vm_size  = var.vm_size

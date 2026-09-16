@@ -46,7 +46,7 @@ locals {
     dynu_hostname     = var.dynu_hostname
     timezone          = var.timezone
     admin_username    = var.admin_username
-    ssh_public_key    = trimspace(var.ssh_public_key)
+    ssh_public_keys   = [for k in var.ssh_public_keys : trimspace(k)]
     ssh_port          = var.ssh_port
     allowed_ssh_cidrs = var.allowed_ssh_cidrs
     packages          = local.packages

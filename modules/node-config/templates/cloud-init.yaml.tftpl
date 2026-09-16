@@ -25,7 +25,9 @@ users:
     lock_passwd: true
     sudo: "ALL=(ALL) NOPASSWD:ALL"
     ssh_authorized_keys:
-      - "${ssh_public_key}"
+%{ for key in ssh_public_keys ~}
+      - "${key}"
+%{ endfor ~}
 
 write_files:
   # Drop-in is named 10- deliberately: sshd honours the *first* value it sees
