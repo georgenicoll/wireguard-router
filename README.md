@@ -34,16 +34,7 @@ byte-for-byte identically configured.
 
 ## One-time setup
 
-**1. Generate WireGuard keys.**
-
-```bash
-./scripts/genkeys.sh laptop 10.66.66.2
-```
-
-This prints a server private key and peer block for your config file, plus a
-ready-to-use client config. Keys are printed once and never written to disk.
-
-**2. Create your config file, outside this repository.**
+**1. Create your config file, outside this repository.**
 
 ```bash
 cp config.example.tfvars ~/private/wireguard-router.tfvars
@@ -60,11 +51,31 @@ Optionally keep state outside the repo too — it also contains those secrets:
 export WGR_STATE_DIR=~/private/wireguard-router-state
 ```
 
+**2. Generate your WireGuard keys and first peer.** See
+[Generating WireGuard configuration](#generating-wireguard-configuration) below.
+
+```bash
+./scripts/wg-peer.sh add laptop 10.66.66.2
+```
+
 **3. Provide cloud credentials.** For Linode:
 
 ```bash
 export LINODE_TOKEN=...   # or set linode_token in your config file
 ```
+
+## Environment variables
+
+| Variable | Purpose |
+| --- | --- |
+| `WGR_CONFIG` | Path to your private `.tfvars` file. Required for `plan`/`apply`/`destroy`. |
+| `WGR_KEYS` | Key store location. Defaults to `wireguard-router-keys` beside `WGR_CONFIG`. |
+| `WGR_STATE_DIR` | Keep state outside the repo, one file per platform. Recommended. |
+| `WGR_ENDPOINT` | Override the `Endpoint` written into client configs. |
+| `WGR_CLIENT_ROUTES` | Override client `AllowedIPs`. Default `0.0.0.0/0, ::/0` (full tunnel). |
+| `WGR_CLIENT_DNS` | Override client `DNS`. Default `1.1.1.1`. |
+
+Worth putting the first three in your shell profile or a direnv `.envrc`.
 
 ## Usage
 
@@ -92,6 +103,102 @@ Point clients at the dynamic hostname, not the IP:
 ```bash
 ./wgr linode output -raw wireguard_endpoint    # e.g. yourname.freeddns.org:47654
 ```
+
+## Generating WireGuard configuration
+
+Keys are created with the standard `wireguard-tools` (`wg genkey`, `wg genpsk`,
+`wg pubkey`) and kept in a **key store** outside this repository.
+`scripts/wg-peer.sh` manages that store and writes a tfvars file from it, which
+`./wgr` then passes to OpenTofu automatically. You never paste a key by hand,
+and you never edit the generated file.
+
+```bash
+./scripts/wg-peer.sh add laptop 10.66.66.2     # new peer + printed client config
+./scripts/wg-peer.sh client laptop             # reprint that client config later
+./scripts/wg-peer.sh list                      # peers, server pubkey, endpoint
+./scripts/wg-peer.sh remove laptop             # revoke a peer (prompts first)
+./scripts/wg-peer.sh regen                     # rebuild the tfvars from the store
+./scripts/wg-peer.sh server-pubkey             # print the server public key
+./scripts/wg-peer.sh rotate-server --force     # new server key; breaks all clients
+```
+
+After any change that alters the store, apply it to the server:
+
+```bash
+./wgr linode apply
+```
+
+### Where the keys live
+
+The store location is `$WGR_KEYS`, defaulting to a `wireguard-router-keys`
+directory alongside your `WGR_CONFIG` file. Directories are created `0700` and
+every file `0600`.
+
+```
+~/private/wireguard-router-keys/
+├── server.key                      # server private key, created once
+├── peers/
+│   └── laptop/
+│       ├── private.key             # retained, so client configs are reprintable
+│       ├── public.key
+│       ├── preshared.key
+│       └── allowed_ips             # tunnel addresses this peer may use
+└── wireguard.generated.tfvars      # GENERATED - consumed automatically by ./wgr
+```
+
+Back this directory up. It is the only copy of your keys, and losing
+`server.key` means reconfiguring every client.
+
+### How it reaches OpenTofu
+
+`wgr` passes two `-var-file` flags: your main config first, then the generated
+file. Later files win in OpenTofu, so the store is authoritative for
+`wireguard_private_key` and `wireguard_peers`. That is why those two settings
+are absent from `config.example.tfvars` — if you do set them there, `wgr`
+prints a warning that the generated file is overriding you.
+
+```
+tofu ... -var-file=<your config> -var-file=<store>/wireguard.generated.tfvars
+```
+
+The generated file is plain HCL, so you can always read exactly what tofu will
+receive. If you would rather not use the store at all, delete the generated file
+and set `wireguard_private_key` and `wireguard_peers` in your own config by
+hand; nothing else depends on the script.
+
+### Adding more peers safely
+
+`add` creates `server.key` **only when it is absent**, so adding your tenth peer
+cannot rotate the server key out from under the first nine. Rotating is possible
+but has to be asked for explicitly with `rotate-server --force`, which then
+lists the clients you need to reissue.
+
+Each peer needs its own tunnel address. `add` refuses a name that already
+exists, refuses an address already assigned to another peer, and validates
+addresses numerically — `10.66.66.256` and `999.1.1.1` are rejected rather than
+quietly accepted.
+
+Client configs are rendered with `Endpoint` filled in from `dynu_hostname` and
+`wireguard_port` in your config file, `AllowedIPs = 0.0.0.0/0, ::/0` for a full
+tunnel, and `DNS = 1.1.1.1`. Override any of them per invocation:
+
+```bash
+WGR_ENDPOINT=host:51820 \
+WGR_CLIENT_ROUTES="10.66.66.0/24" \
+WGR_CLIENT_DNS=9.9.9.9 \
+  ./scripts/wg-peer.sh client laptop
+```
+
+`WGR_CLIENT_ROUTES` is the useful one: the default sends *all* the client's
+traffic through the server, whereas `10.66.66.0/24` gives a split tunnel where
+only traffic between peers is routed.
+
+### A note on secrets
+
+The server's private key necessarily ends up in OpenTofu state, because it has
+to be delivered to the machine. The key store does not change that — it just
+stops the key living in a file you hand-edit. Treat state as sensitively as the
+store itself, which is what `WGR_STATE_DIR` is for.
 
 ## Switching cloud provider
 
@@ -153,8 +260,10 @@ the server's WireGuard public key must stay the same, which it does as long as
 
 ## Notes
 
-- `wireguard_private_key` should be treated as permanent. Changing it
-  invalidates every client config.
+- Your WireGuard keys live in the key store, not in your config file — see
+  [Generating WireGuard configuration](#generating-wireguard-configuration).
+  Back that directory up; `server.key` should be treated as permanent, because
+  changing it invalidates every client config.
 - Narrow `allowed_ssh_cidrs` to your own network if you have a static IP. The
   default of `0.0.0.0/0` is safe but noisy.
 - `image` defaults to Ubuntu 24.04 LTS. Bump it in your config file to move to a
@@ -168,7 +277,7 @@ the server's WireGuard public key must stay the same, which it does as long as
 ```
 wgr                          driver script: ./wgr <cloud> <tofu command>
 config.example.tfvars        template for your private config file
-scripts/genkeys.sh           WireGuard key + client config generator
+scripts/wg-peer.sh           key store + client config management
 shared/                      cloud-agnostic variables and outputs (symlinked)
 modules/node-config/         all server configuration, provider-independent
 modules/platform/{linode,aws,gcp,azure}/

@@ -14,6 +14,14 @@ override.tf.json
 terraform.rc
 tofu.rc
 
+# VScode workspace
+*.code-workspace
+
+# Key store, in case it is ever placed inside the repo rather than beside
+# WGR_CONFIG. It holds WireGuard private keys.
+wireguard-router-keys/
+*.generated.tfvars
+
 # Never commit real configuration or secrets. Only *.example.tfvars is tracked.
 *.tfvars
 *.tfvars.json
