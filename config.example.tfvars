@@ -62,11 +62,59 @@ dynu_api_key = "your-dynu-api-key"
 dynu_update_interval = "5min"
 
 # --- Provider selection -----------------------------------------------------
-# Only the block matching the stack you run is used; unknown variables in a
-# var file are an error, so keep just the ones you need or leave all of them
-# (each stack declares its own, so remove blocks for stacks you never run).
+#
+# Uncomment exactly ONE of the four blocks below, and leave the rest commented.
+#
+# Two reasons this matters:
+#   * Each stack only declares its own platform variables, and OpenTofu treats
+#     a variable it does not declare as an error. A stray gcp_project while
+#     running the linode stack will stop the plan.
+#   * instance_type is used by both linode and aws, and image by both linode
+#     and gcp. With two blocks live, OpenTofu refuses to load the file at all
+#     ("Attribute redefined") rather than picking one silently - so this fails
+#     loudly, but it is still simplest to keep only one block uncommented.
+#
+# Credentials are best left out of this file entirely and exported in your
+# shell instead, as shown per provider.
 
-# Linode
-region        = "eu-west"
-instance_type = "g6-nanode-1"
-linode_token  = "" # prefer: export LINODE_TOKEN=...
+# --- Linode -----------------------------------------------------------------
+# Credentials: export LINODE_TOKEN=...
+# Run with:    ./wgr linode apply
+
+region        = "eu-west"     # London. us-east = Newark, ap-south = Singapore
+instance_type = "g6-nanode-1" # cheapest plan, 1 GB
+image         = "linode/ubuntu24.04"
+# linode_token  = "..."   # only if you would rather not use LINODE_TOKEN
+
+# --- AWS --------------------------------------------------------------------
+# Credentials: export AWS_PROFILE=... (or the standard AWS_* variables)
+# Run with:    ./wgr aws apply
+#
+# architecture must match instance_type: arm64 for t4g.*, x86_64 for t3.*.
+
+# aws_region    = "eu-west-2" # London
+# instance_type = "t4g.nano"  # cheapest current generation, arm64
+# architecture  = "arm64"
+# vpc_id        = ""          # empty = the account's default VPC
+# subnet_id     = ""          # empty = pick a subnet automatically
+
+# --- GCP --------------------------------------------------------------------
+# Credentials: gcloud auth application-default login
+# Run with:    ./wgr gcp apply
+#
+# gcp_project is required - there is no sensible default for it.
+# e2-micro is free-tier eligible only in us-west1, us-central1 and us-east1.
+
+# gcp_project  = "my-project-id"
+# gcp_zone     = "us-central1-a"
+# machine_type = "e2-micro"
+# image        = "ubuntu-os-cloud/ubuntu-2404-lts-amd64"
+# network      = "default"
+
+# --- Azure ------------------------------------------------------------------
+# Credentials: az login (or the standard ARM_* service-principal variables)
+# Run with:    ./wgr azure apply
+
+# azure_location        = "uksouth"
+# vm_size               = "Standard_B1ls" # cheapest Linux size, 0.5 GiB
+# azure_subscription_id = "..."           # or export ARM_SUBSCRIPTION_ID
