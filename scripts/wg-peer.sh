@@ -6,13 +6,16 @@
 # pubkey) and kept in a private store outside this repository. The tfvars file
 # is *derived* from that store: this script writes it, you never edit it.
 #
-#   ./scripts/wg-peer.sh add laptop 10.66.66.2   # new peer + client config
-#   ./scripts/wg-peer.sh client laptop           # reprint a client config
-#   ./scripts/wg-peer.sh list                    # show configured peers
-#   ./scripts/wg-peer.sh remove laptop           # revoke a peer
-#   ./scripts/wg-peer.sh regen                   # rebuild the tfvars
-#   ./scripts/wg-peer.sh server-pubkey           # the server's public key
-#   ./scripts/wg-peer.sh rotate-server --force   # new server key (breaks all clients)
+#   ./scripts/wg-peer.sh add laptop 10.66.66.2        # simple client, no LAN behind it
+#   ./scripts/wg-peer.sh add router 10.73.73.2 \
+#       --lan 10.2.73.0/24 --dns 10.2.73.1            # site-to-site: routes a whole LAN
+#   ./scripts/wg-peer.sh update router --dns 10.2.73.5  # change metadata, keep its keys
+#   ./scripts/wg-peer.sh client laptop                # reprint a client config
+#   ./scripts/wg-peer.sh list                         # show configured peers
+#   ./scripts/wg-peer.sh remove laptop                # revoke a peer
+#   ./scripts/wg-peer.sh regen                        # rebuild the tfvars
+#   ./scripts/wg-peer.sh server-pubkey                # the server's public key
+#   ./scripts/wg-peer.sh rotate-server --force        # new server key (breaks all clients)
 #
 # Store location, in order of preference:
 #   $WGR_KEYS                       if set
@@ -23,7 +26,9 @@
 #   peers/<name>/private.key        retained so client configs stay reprintable
 #   peers/<name>/public.key
 #   peers/<name>/preshared.key
-#   peers/<name>/allowed_ips        tunnel addresses this peer may use
+#   peers/<name>/own_ip             the peer's single address on the tunnel (/32 or /128)
+#   peers/<name>/lan_subnet         optional: a real LAN this peer routes to the tunnel
+#   peers/<name>/dns                optional: DNS override for this peer's client config
 #   wireguard.generated.tfvars      generated; consumed automatically by ./wgr
 #
 set -euo pipefail
@@ -38,6 +43,8 @@ note() { echo "$*" >&2; }
 
 command -v wg >/dev/null 2>&1 ||
     die "'wg' not found. Install it with: sudo apt install wireguard-tools"
+command -v python3 >/dev/null 2>&1 ||
+    die "'python3' not found. It is used for correct CIDR/subnet-overlap checks."
 
 # --- Locate the key store ---------------------------------------------------
 
@@ -58,12 +65,12 @@ PEERS_DIR="$STORE/peers"
 SERVER_KEY="$STORE/server.key"
 TFVARS="$STORE/wireguard.generated.tfvars"
 
-# --- Helpers ----------------------------------------------------------------
+# --- Basic validators --------------------------------------------------------
 
 valid_peer_name() { [[ "$1" =~ ^[a-z0-9][a-z0-9_-]{0,31}$ ]]; }
 
-# A bare IPv4 address or one with a prefix length. Octet and prefix ranges are
-# checked numerically: a regex alone would happily accept 999.1.1.1.
+# Octet and prefix ranges are checked numerically: a regex alone would happily
+# accept 999.1.1.1.
 valid_ipv4() {
     local addr="${1%%/*}" octet
     [[ "$addr" =~ ^[0-9]{1,3}(\.[0-9]{1,3}){3}$ ]] || return 1
@@ -88,23 +95,69 @@ valid_ipv6() {
     return 0
 }
 
-valid_allowed_ip() { valid_ipv4 "$1" || valid_ipv6 "$1"; }
+valid_cidr() { valid_ipv4 "$1" || valid_ipv6 "$1"; }
 
-# Normalise "10.66.66.2" to "10.66.66.2/32" so the server routes exactly one
-# address per peer; anything already carrying a prefix is left alone.
-normalise_allowed_ips() {
-    local raw="$1" out=() ip
-    raw="${raw//,/ }"
-    for ip in $raw; do
-        [[ -z "$ip" ]] && continue
-        valid_allowed_ip "$ip" || die "not a valid address or CIDR: $ip"
-        if [[ "$ip" != */* ]]; then
-            [[ "$ip" == *:* ]] && ip="$ip/128" || ip="$ip/32"
+# A bare address, no prefix - for DNS server entries.
+valid_ip_address() { [[ "$1" != */* ]] && valid_cidr "$1"; }
+
+# --- CIDR arithmetic (delegated to python3's ipaddress module) --------------
+
+# Prints the canonical network for a CIDR, masking off any host bits. Used so
+# stored subnets are unambiguous on disk (10.2.73.5/24 -> 10.2.73.0/24).
+canonical_network() {
+    python3 -c "import ipaddress,sys; print(ipaddress.ip_network(sys.argv[1], strict=False))" "$1"
+}
+
+# True (exit 0) if two CIDRs share any address. This is real subnet overlap,
+# not string comparison - 10.73.73.2/24 and 10.73.73.3/24 look different as
+# text but are the same network, and this catches that.
+cidr_overlaps() {
+    python3 -c "
+import ipaddress, sys
+a = ipaddress.ip_network(sys.argv[1], strict=False)
+b = ipaddress.ip_network(sys.argv[2], strict=False)
+sys.exit(0 if a.overlaps(b) else 1)
+" "$1" "$2"
+}
+
+
+# Normalise a peer's own tunnel address: must be exactly one host, so an
+# explicit prefix shorter than full length is rejected rather than silently
+# treated as "route this whole subnet to this peer" (the mistake that started
+# this feature: 10.73.73.2/24 and 10.73.73.3/24 both mean the whole /24).
+normalise_own_ip() {
+    local ip="$1"
+    valid_cidr "$ip" || die "not a valid address: $ip"
+    if [[ "$ip" == */* ]]; then
+        local prefix="${ip#*/}"
+        if [[ "$ip" == *:* ]]; then
+            [[ "$prefix" == "128" ]] ||
+                die "a peer's own address must be a single host (/128), not a subnet: $ip"
+        else
+            [[ "$prefix" == "32" ]] ||
+                die "a peer's own address must be a single host (/32), not a subnet: $ip"
         fi
-        out+=("$ip")
-    done
-    [[ ${#out[@]} -gt 0 ]] || die "no addresses given"
-    printf '%s\n' "${out[@]}"
+        printf '%s' "$ip"
+    else
+        [[ "$ip" == *:* ]] && printf '%s/128' "$ip" || printf '%s/32' "$ip"
+    fi
+}
+
+# Normalise a LAN subnet: requires an explicit prefix (a bare address here is
+# almost certainly a mistake - use own_ip / --lan correctly instead), and
+# canonicalises host bits so what is on disk always matches what wg will
+# actually route.
+normalise_lan_subnet() {
+    local cidr="$1" canon
+    [[ -n "$cidr" ]] || die "empty LAN subnet"
+    [[ "$cidr" == */* ]] ||
+        die "a LAN subnet needs an explicit prefix, e.g. 10.2.73.0/24: $cidr"
+    valid_cidr "$cidr" || die "not a valid subnet: $cidr"
+    canon="$(canonical_network "$cidr")"
+    if [[ "$canon" != "$cidr" ]]; then
+        note "note: $cidr has host bits set; storing it as the network $canon"
+    fi
+    printf '%s' "$canon"
 }
 
 ensure_store() {
@@ -133,18 +186,38 @@ peer_names() {
     find "$PEERS_DIR" -mindepth 1 -maxdepth 1 -type d -printf '%f\n' 2>/dev/null | sort
 }
 
-# Pull the endpoint out of your main config file so client configs come out
-# complete. Falls back to a placeholder when it cannot be determined.
+peer_own_ip() { cat "$PEERS_DIR/$1/own_ip" 2>/dev/null || true; }
+peer_lan_subnet() { cat "$PEERS_DIR/$1/lan_subnet" 2>/dev/null || true; }
+peer_dns() { cat "$PEERS_DIR/$1/dns" 2>/dev/null || true; }
+
+# The full AllowedIPs list for a peer: its own address, plus its routed LAN
+# if it has one.
+peer_allowed_ips() {
+    local name="$1" own lan
+    own="$(peer_own_ip "$name")"
+    [[ -n "$own" ]] || die "peer '$name' has no own_ip (old-format peer?). Fix with: $PROG update $name --ip <address>"
+    printf '%s\n' "$own"
+    lan="$(peer_lan_subnet "$name")"
+    [[ -n "$lan" ]] && printf '%s\n' "$lan"
+}
+
+# Pull a value out of your main config file by variable name. Used for the
+# endpoint and the network-wide default DNS, so client configs come out
+# complete without duplicating those settings here.
+config_value() {
+    local var="$1"
+    [[ -n "${WGR_CONFIG:-}" && -r "${WGR_CONFIG:-}" ]] || return 0
+    sed -nE "s/^[[:space:]]*${var}[[:space:]]*=[[:space:]]*\"([^\"]*)\".*/\1/p" "$WGR_CONFIG" | tail -1
+}
+
 derive_endpoint() {
     if [[ -n "${WGR_ENDPOINT:-}" ]]; then
         printf '%s' "$WGR_ENDPOINT"
         return
     fi
-    local host="" port=""
-    if [[ -n "${WGR_CONFIG:-}" && -r "${WGR_CONFIG:-}" ]]; then
-        host=$(sed -nE 's/^[[:space:]]*dynu_hostname[[:space:]]*=[[:space:]]*"([^"]+)".*/\1/p' "$WGR_CONFIG" | tail -1)
-        port=$(sed -nE 's/^[[:space:]]*wireguard_port[[:space:]]*=[[:space:]]*([0-9]+).*/\1/p' "$WGR_CONFIG" | tail -1)
-    fi
+    local host port
+    host="$(config_value dynu_hostname)"
+    port="$(sed -nE 's/^[[:space:]]*wireguard_port[[:space:]]*=[[:space:]]*([0-9]+).*/\1/p' "${WGR_CONFIG:-/dev/null}" 2>/dev/null | tail -1)"
     [[ -z "$port" ]] && port="47654" # matches the variable default
     if [[ -n "$host" ]]; then
         printf '%s:%s' "$host" "$port"
@@ -153,11 +226,65 @@ derive_endpoint() {
     fi
 }
 
+# The tunnel's own network (wireguard_address in your config, defaulting to
+# match the tofu variable), used to warn if a peer's own_ip looks unrelated to
+# it, and to refuse a LAN subnet that collides with the tunnel itself.
+derive_tunnel_network() {
+    local addr
+    addr="$(config_value wireguard_address)"
+    [[ -z "$addr" ]] && addr="10.66.66.1/24" # matches the variable default
+    canonical_network "$addr"
+}
+
+# The network-wide default DNS from your config, if set.
+derive_default_dns() {
+    config_value wireguard_dns
+}
+
+# --- Overlap checking ---------------------------------------------------------
+
+# Every address range a peer currently occupies (own_ip and, if present,
+# lan_subnet), across every peer except the one named in $1 (used by `update`
+# so a peer's own existing ranges do not conflict with themselves).
+claimed_ranges() {
+    local skip="${1:-}" name own lan
+    while IFS= read -r name; do
+        [[ -z "$name" || "$name" == "$skip" ]] && continue
+        own="$(peer_own_ip "$name")"
+        [[ -n "$own" ]] && printf '%s\t%s\n' "$own" "$name"
+        lan="$(peer_lan_subnet "$name")"
+        [[ -n "$lan" ]] && printf '%s\t%s\n' "$lan" "$name"
+    done < <(peer_names)
+}
+
+# Dies if $1 (a CIDR) overlaps anything already claimed, other than by the
+# peer named in $2 (its own prior values, for `update`). $3 is "own_ip" or
+# "lan_subnet": an own_ip is *expected* to sit inside the tunnel network, so
+# that check is skipped for it; a lan_subnet must never overlap the tunnel
+# network at all, even if it is fully contained by (or equal to) it - that
+# would still mean routing addresses already used by every other peer and the
+# server itself to just one peer.
+check_no_overlap() {
+    local candidate="$1" skip="$2" kind="$3" range owner tunnel
+    while IFS=$'\t' read -r range owner; do
+        [[ -z "$range" ]] && continue
+        cidr_overlaps "$candidate" "$range" &&
+            die "$candidate overlaps $range, already used by peer '$owner'"
+    done < <(claimed_ranges "$skip")
+
+    if [[ "$kind" == "lan_subnet" ]]; then
+        tunnel="$(derive_tunnel_network)"
+        cidr_overlaps "$candidate" "$tunnel" &&
+            die "$candidate overlaps the tunnel network $tunnel (wireguard_address); a LAN subnet cannot include tunnel addresses"
+    fi
+    return 0
+}
+
 # --- tfvars generation ------------------------------------------------------
 
 regen_tfvars() {
     [[ -f "$SERVER_KEY" ]] || die "no server key yet; nothing to generate"
-    local tmp name pub psk ips first
+    local tmp name pub psk first ip
     tmp="$(mktemp "${TMPDIR:-/tmp}/wgr-tfvars.XXXXXX")"
 
     {
@@ -177,7 +304,15 @@ regen_tfvars() {
         while IFS= read -r name; do
             [[ -z "$name" ]] && continue
             pub="$PEERS_DIR/$name/public.key"
-            [[ -f "$pub" ]] || { note "skipping '$name': no public.key"; continue; }
+            if [[ ! -f "$pub" ]]; then
+                note "skipping '$name': no public.key"
+                continue
+            fi
+            if [[ ! -f "$PEERS_DIR/$name/own_ip" ]]; then
+                note "skipping '$name': old-format peer with no own_ip."
+                note "  Fix with: $PROG update $name --ip <address>"
+                continue
+            fi
             echo "  {"
             printf '    %-13s = "%s"\n' "name" "$name"
             printf '    %-13s = "%s"\n' "public_key" "$(cat "$pub")"
@@ -185,7 +320,6 @@ regen_tfvars() {
             if [[ -s "$psk" ]]; then
                 printf '    %-13s = "%s"\n' "preshared_key" "$(cat "$psk")"
             fi
-            ips="$PEERS_DIR/$name/allowed_ips"
             printf '    %-13s = [' "allowed_ips"
             first=1
             while IFS= read -r ip; do
@@ -193,7 +327,7 @@ regen_tfvars() {
                 [[ $first -eq 1 ]] || printf ', '
                 printf '"%s"' "$ip"
                 first=0
-            done < "$ips"
+            done < <(peer_allowed_ips "$name")
             printf ']\n'
             echo "  },"
         done < <(peer_names)
@@ -206,9 +340,28 @@ regen_tfvars() {
 }
 
 # --- Client config ----------------------------------------------------------
+
+# Precedence: an explicit WGR_CLIENT_DNS wins outright (an ad-hoc override for
+# this one printout); then the peer's own stored --dns; then the network-wide
+# wireguard_dns default from your config; then a public fallback.
+effective_dns() {
+    local name="$1" own
+    if [[ -n "${WGR_CLIENT_DNS:-}" ]]; then
+        printf '%s' "$WGR_CLIENT_DNS"
+        return
+    fi
+    own="$(peer_dns "$name")"
+    [[ -n "$own" ]] && { printf '%s' "$own"; return; }
+    own="$(derive_default_dns)"
+    [[ -n "$own" ]] && { printf '%s' "$own"; return; }
+    printf '1.1.1.1'
+}
+
 print_client_config() {
-    local name="$1" dir="$PEERS_DIR/$1" endpoint
+    local name="$1" dir="$PEERS_DIR/$1" endpoint own lan
     [[ -d "$dir" ]] || die "no such peer: $name (see '$PROG list')"
+    own="$(peer_own_ip "$name")"
+    [[ -n "$own" ]] || die "peer '$name' has no own_ip. Fix with: $PROG update $name --ip <address>"
     endpoint="$(derive_endpoint)"
 
     echo "# WireGuard client config for '$name'"
@@ -216,9 +369,8 @@ print_client_config() {
     echo
     echo "[Interface]"
     echo "PrivateKey = $(cat "$dir/private.key")"
-    printf 'Address = '
-    paste -sd, "$dir/allowed_ips"
-    echo "DNS = ${WGR_CLIENT_DNS:-1.1.1.1}"
+    echo "Address = $own"
+    echo "DNS = $(effective_dns "$name")"
     echo
     echo "[Peer]"
     echo "PublicKey = $(server_pubkey)"
@@ -227,6 +379,14 @@ print_client_config() {
     echo "AllowedIPs = ${WGR_CLIENT_ROUTES:-0.0.0.0/0, ::/0}"
     echo "PersistentKeepalive = 25"
 
+    lan="$(peer_lan_subnet "$name")"
+    if [[ -n "$lan" ]]; then
+        echo
+        note "note: '$name' routes $lan to the tunnel. Other peers reaching it need"
+        note "      that subnet added to *their* AllowedIPs above, or the server"
+        note "      alone can reach it while other peers cannot."
+    fi
+
     if [[ "$endpoint" == "<"* ]]; then
         echo
         note "note: could not determine the endpoint; set dynu_hostname in your"
@@ -234,32 +394,51 @@ print_client_config() {
     fi
 }
 
+# --- Argument parsing for add/update -----------------------------------------
+
+# Fills the caller's own_ip/lan_subnet/dns/clear_lan/clear_dns variables from
+# "--lan X" / "--dns X" / "--ip X" / "--clear-lan" / "--clear-dns" in "$@".
+parse_peer_flags() {
+    own_ip=""; lan_subnet=""; dns=""; clear_lan=0; clear_dns=0
+    while [[ $# -gt 0 ]]; do
+        case "$1" in
+        --ip) own_ip="${2:-}"; shift 2 ;;
+        --lan) lan_subnet="${2:-}"; shift 2 ;;
+        --dns) dns="${2:-}"; shift 2 ;;
+        --clear-lan) clear_lan=1; shift ;;
+        --clear-dns) clear_dns=1; shift ;;
+        *) die "unknown option: $1" ;;
+        esac
+    done
+}
+
 # --- Subcommands ------------------------------------------------------------
 
 cmd_add() {
-    local name="${1:-}" ips_raw="${2:-}"
-    [[ -n "$name" && -n "$ips_raw" ]] || die "usage: $PROG add <name> <tunnel-ip>"
+    local name="${1:-}" ip_raw="${2:-}"
+    [[ -n "$name" && -n "$ip_raw" ]] ||
+        die "usage: $PROG add <name> <own-ip> [--lan <subnet>] [--dns <ip>]"
+    shift 2
     valid_peer_name "$name" ||
         die "peer name must be lowercase alphanumeric with - or _, max 32 chars"
 
     local dir="$PEERS_DIR/$name"
     [[ -e "$dir" ]] && die "peer '$name' already exists (remove it first, or pick another name)"
 
-    local ips
-    ips="$(normalise_allowed_ips "$ips_raw")"
+    local own_ip lan_subnet dns clear_lan clear_dns
+    parse_peer_flags "$@"
 
-    # Two peers sharing a tunnel address would route unpredictably.
-    local existing other
-    while IFS= read -r other; do
-        [[ -z "$other" ]] && continue
-        while IFS= read -r existing; do
-            [[ -z "$existing" ]] && continue
-            while IFS= read -r wanted; do
-                [[ "$existing" == "$wanted" ]] &&
-                    die "address $wanted is already assigned to peer '$other'"
-            done <<< "$ips"
-        done < "$PEERS_DIR/$other/allowed_ips"
-    done < <(peer_names)
+    own_ip="$(normalise_own_ip "$ip_raw")"
+    check_no_overlap "$own_ip" "" own_ip
+
+    if [[ -n "$lan_subnet" ]]; then
+        lan_subnet="$(normalise_lan_subnet "$lan_subnet")"
+        check_no_overlap "$lan_subnet" "" lan_subnet
+    fi
+
+    if [[ -n "$dns" ]]; then
+        valid_ip_address "$dns" || die "not a valid DNS address: $dns"
+    fi
 
     ensure_server_key
     mkdir -p "$dir"
@@ -268,15 +447,65 @@ cmd_add() {
     wg genkey > "$dir/private.key"
     wg pubkey < "$dir/private.key" > "$dir/public.key"
     wg genpsk > "$dir/preshared.key"
-    printf '%s\n' "$ips" > "$dir/allowed_ips"
+    printf '%s' "$own_ip" > "$dir/own_ip"
+    [[ -n "$lan_subnet" ]] && printf '%s' "$lan_subnet" > "$dir/lan_subnet"
+    [[ -n "$dns" ]] && printf '%s' "$dns" > "$dir/dns"
     chmod 600 "$dir"/*
 
-    note "added peer '$name' ($(paste -sd, "$dir/allowed_ips"))"
+    note "added peer '$name' ($own_ip$([[ -n "$lan_subnet" ]] && echo ", routing $lan_subnet"))"
     regen_tfvars
     note ""
     note "Apply the change with: ./wgr <platform> apply"
     note ""
     print_client_config "$name"
+}
+
+cmd_update() {
+    local name="${1:-}"
+    [[ -n "$name" ]] ||
+        die "usage: $PROG update <name> [--ip <addr>] [--lan <subnet>] [--dns <ip>] [--clear-lan] [--clear-dns]"
+    shift
+
+    local dir="$PEERS_DIR/$name"
+    [[ -d "$dir" ]] || die "no such peer: $name (see '$PROG list')"
+
+    local own_ip lan_subnet dns clear_lan clear_dns
+    parse_peer_flags "$@"
+    [[ -n "$own_ip" || -n "$lan_subnet" || -n "$dns" || "$clear_lan" -eq 1 || "$clear_dns" -eq 1 ]] ||
+        die "nothing to update: pass --ip, --lan, --dns, --clear-lan or --clear-dns"
+
+    if [[ -n "$own_ip" ]]; then
+        own_ip="$(normalise_own_ip "$own_ip")"
+        check_no_overlap "$own_ip" "$name" own_ip
+        printf '%s' "$own_ip" > "$dir/own_ip"
+        note "updated '$name' own_ip -> $own_ip"
+    fi
+
+    if [[ "$clear_lan" -eq 1 ]]; then
+        rm -f "$dir/lan_subnet"
+        note "cleared '$name' lan_subnet"
+    elif [[ -n "$lan_subnet" ]]; then
+        lan_subnet="$(normalise_lan_subnet "$lan_subnet")"
+        check_no_overlap "$lan_subnet" "$name" lan_subnet
+        printf '%s' "$lan_subnet" > "$dir/lan_subnet"
+        note "updated '$name' lan_subnet -> $lan_subnet"
+    fi
+
+    if [[ "$clear_dns" -eq 1 ]]; then
+        rm -f "$dir/dns"
+        note "cleared '$name' dns override"
+    elif [[ -n "$dns" ]]; then
+        valid_ip_address "$dns" || die "not a valid DNS address: $dns"
+        printf '%s' "$dns" > "$dir/dns"
+        note "updated '$name' dns -> $dns"
+    fi
+
+    chmod 600 "$dir"/* 2>/dev/null || true
+    regen_tfvars
+    note ""
+    note "Apply the change with: ./wgr <platform> apply"
+    note "This did not change '$name's keys - no client-side reconfiguration needed"
+    note "unless you also changed --ip (its Address in the client config)."
 }
 
 cmd_client() {
@@ -286,21 +515,31 @@ cmd_client() {
 }
 
 cmd_list() {
-    local n=0 name
+    local n=0 name own lan dns
     if [[ ! -f "$SERVER_KEY" ]]; then
         echo "No key store yet at $STORE"
-        echo "Create one with: $PROG add <name> <tunnel-ip>"
+        echo "Create one with: $PROG add <name> <own-ip>"
         return
     fi
     echo "Key store:     $STORE"
     echo "Server pubkey: $(server_pubkey)"
     echo "Endpoint:      $(derive_endpoint)"
+    local default_dns
+    default_dns="$(derive_default_dns)"
+    echo "Default DNS:   ${default_dns:-(none set; peers fall back to 1.1.1.1)}"
     echo "Generated:     $TFVARS$([[ -f "$TFVARS" ]] || echo '  (missing - run '"$PROG"' regen)')"
     echo
-    printf '%-24s %s\n' "PEER" "ALLOWED IPS"
+    printf '%-20s %-18s %-18s %s\n' "PEER" "OWN IP" "LAN SUBNET" "DNS OVERRIDE"
     while IFS= read -r name; do
         [[ -z "$name" ]] && continue
-        printf '%-24s %s\n' "$name" "$(paste -sd, "$PEERS_DIR/$name/allowed_ips" 2>/dev/null)"
+        own="$(peer_own_ip "$name")"
+        if [[ -z "$own" ]]; then
+            printf '%-20s %s\n' "$name" "(old format - fix with: $PROG update $name --ip <address>)"
+        else
+            lan="$(peer_lan_subnet "$name")"
+            dns="$(peer_dns "$name")"
+            printf '%-20s %-18s %-18s %s\n' "$name" "$own" "${lan:--}" "${dns:--}"
+        fi
         n=$((n + 1))
     done < <(peer_names)
     [[ $n -eq 0 ]] && echo "(none)"
@@ -349,6 +588,7 @@ usage() {
 
 case "${1:-}" in
 add)            shift; cmd_add "$@" ;;
+update)         shift; cmd_update "$@" ;;
 client)         shift; cmd_client "$@" ;;
 list|ls)        shift; cmd_list "$@" ;;
 remove|rm)      shift; cmd_remove "$@" ;;

@@ -144,6 +144,17 @@ variable "wireguard_nat" {
   default     = true
 }
 
+variable "wireguard_dns" {
+  description = <<-EOT
+    Default DNS server handed to peers in their client config, e.g. a
+    resolver reachable through one peer's routed LAN. Empty means no
+    network-wide default; scripts/wg-peer.sh falls back to a public resolver
+    unless a peer has its own override (see wg-peer.sh add --dns).
+  EOT
+  type        = string
+  default     = ""
+}
+
 # --- Dynu dynamic DNS -------------------------------------------------------
 
 variable "dynu_hostname" {

@@ -59,7 +59,11 @@ the server takes `.1`:
 | first peer | `10.66.66.2` | `wg-peer.sh add` |
 | second peer | `10.66.66.3` | `wg-peer.sh add` |
 
-Give every peer its own address. The script refuses duplicates.
+Give every peer its own single address here. The script refuses duplicates,
+and checks real subnet overlap, not just exact matches. If a peer is a router
+gatewaying a whole LAN rather than a single device, that LAN is a *separate*
+setting — see
+[Two kinds of peer](#two-kinds-of-peer) — not a wider mask on its own address.
 
 **5. Generate the server key and your peers.** There is no separate step for
 the server key — the very first `./scripts/wg-peer.sh add` creates it
@@ -74,7 +78,8 @@ it. One command per device:
 Each prints a ready-to-use client config, and writes the keys into the store
 beside your config file. See
 [Generating WireGuard configuration](#generating-wireguard-configuration) for
-what the store looks like and why the server key is never rotated by `add`.
+what the store looks like, why the server key is never rotated by `add`, and
+how to add a router that gateways a whole LAN instead of a single device.
 
 **6. Create the server.**
 
@@ -237,7 +242,10 @@ Keys are created with the standard `wireguard-tools` (`wg genkey`, `wg genpsk`,
 and you never edit the generated file.
 
 ```bash
-./scripts/wg-peer.sh add laptop 10.66.66.2     # new peer + printed client config
+./scripts/wg-peer.sh add laptop 10.66.66.2                          # simple client
+./scripts/wg-peer.sh add router 10.73.73.2 --lan 10.2.73.0/24 \
+    --dns 10.2.73.1                                                 # site-to-site
+./scripts/wg-peer.sh update router --dns 10.2.73.5                  # edit, keep its keys
 ./scripts/wg-peer.sh client laptop             # reprint that client config later
 ./scripts/wg-peer.sh list                      # peers, server pubkey, endpoint
 ./scripts/wg-peer.sh remove laptop             # revoke a peer (prompts first)
@@ -252,6 +260,28 @@ After any change that alters the store, apply it to the server:
 ./wgr linode apply
 ```
 
+### Two kinds of peer
+
+Every peer has its own address on the tunnel (the `<own-ip>` argument to
+`add`) — always a single host, `/32` or `/128`. Beyond that, a peer is either:
+
+- **A simple client** — a laptop or phone. Just `add name own-ip`; it can only
+  ever be reached at that one address.
+- **A site-to-site gateway** — a router (OpenWrt, a travel router, ...) that
+  NATs a whole LAN onto the tunnel. Add `--lan <subnet>` with the *real*
+  subnet behind it, e.g. `--lan 192.168.1.0/24`. The server then routes that
+  entire subnet to this peer, not just its own address.
+
+Getting `--lan` wrong is the one mistake worth calling out: it must be the
+actual LAN subnet, not a restatement of the peer's own address with a wider
+mask. `10.73.73.2/24` is not "peer .2 on a /24" — WireGuard reads it as "route
+the whole `10.73.73.0/24` to this peer," which collides with any other peer in
+that same range. `add`/`update` reject this in two ways: a peer's own `<ip>`
+must be an exact `/32` or `/128` (a subnet-shaped value there is refused
+outright), and every `--lan` is checked for genuine subnet overlap — via real
+CIDR arithmetic, not string comparison — against every other peer's own
+address, every other peer's LAN, and the tunnel's own network.
+
 ### Where the keys live
 
 The store location is `$WGR_KEYS`, defaulting to a `wireguard-router-keys`
@@ -262,11 +292,18 @@ every file `0600`.
 ~/private/wireguard-router-keys/
 ├── server.key                      # server private key, created once
 ├── peers/
-│   └── laptop/
-│       ├── private.key             # retained, so client configs are reprintable
+│   ├── laptop/
+│   │   ├── private.key             # retained, so client configs are reprintable
+│   │   ├── public.key
+│   │   ├── preshared.key
+│   │   └── own_ip                  # this peer's single tunnel address
+│   └── router/
+│       ├── private.key
 │       ├── public.key
 │       ├── preshared.key
-│       └── allowed_ips             # tunnel addresses this peer may use
+│       ├── own_ip
+│       ├── lan_subnet              # present only for a site-to-site peer
+│       └── dns                     # present only if this peer overrides the default DNS
 └── wireguard.generated.tfvars      # GENERATED - consumed automatically by ./wgr
 ```
 
@@ -286,9 +323,24 @@ tofu ... -var-file=<your config> -var-file=<store>/wireguard.generated.tfvars
 ```
 
 The generated file is plain HCL, so you can always read exactly what tofu will
-receive. If you would rather not use the store at all, delete the generated file
-and set `wireguard_private_key` and `wireguard_peers` in your own config by
-hand; nothing else depends on the script.
+receive. Each peer's `allowed_ips` there is its own address plus its LAN
+subnet, if it has one. If you would rather not use the store at all, delete
+the generated file and set `wireguard_private_key` and `wireguard_peers` in
+your own config by hand; nothing else depends on the script.
+
+### Editing a peer without rotating its keys
+
+`update` changes a peer's `--ip`, `--lan` or `--dns` (or clears the latter two
+with `--clear-lan` / `--clear-dns`) in place, leaving its keys untouched:
+
+```bash
+./scripts/wg-peer.sh update router --lan 192.168.1.0/24
+```
+
+This matters because `remove` followed by `add` would mint a **new keypair**
+for that peer — meaning the router (or laptop, or phone) would need
+reconfiguring with a new private key, not just a routing fix on the server.
+Use `update` for anything that is really a metadata change.
 
 ### Adding more peers safely
 
@@ -297,25 +349,48 @@ cannot rotate the server key out from under the first nine. Rotating is possible
 but has to be asked for explicitly with `rotate-server --force`, which then
 lists the clients you need to reissue.
 
-Each peer needs its own tunnel address. `add` refuses a name that already
-exists, refuses an address already assigned to another peer, and validates
-addresses numerically — `10.66.66.256` and `999.1.1.1` are rejected rather than
-quietly accepted.
+`add` also refuses a name that already exists, and validates every address
+numerically — `10.66.66.256` and `999.1.1.1` are rejected rather than quietly
+accepted.
 
-Client configs are rendered with `Endpoint` filled in from `dynu_hostname` and
-`wireguard_port` in your config file, `AllowedIPs = 0.0.0.0/0, ::/0` for a full
-tunnel, and `DNS = 1.1.1.1`. Override any of them per invocation:
+### DNS
+
+Client configs get a `DNS =` line from, in order of precedence:
+
+1. `WGR_CLIENT_DNS`, if set — an ad-hoc override for one `client` invocation,
+   not persisted.
+2. The peer's own stored override, set via `add --dns` / `update --dns`.
+3. `wireguard_dns` in your main config file — a network-wide default, useful
+   when one peer's LAN hosts a resolver (a router or Pi-hole) that every other
+   peer should use.
+4. `1.1.1.1`, if none of the above are set.
+
+```bash
+./scripts/wg-peer.sh add router 10.73.73.2 --lan 192.168.1.0/24 --dns 192.168.1.1
+```
+
+`Endpoint` and the tunnel's own address are similarly derived from your config
+file, and the client's own `AllowedIPs` (what it routes *into* the tunnel, a
+separate thing from the server-side `AllowedIPs` set by `--lan`) can be
+overridden per invocation:
 
 ```bash
 WGR_ENDPOINT=host:51820 \
 WGR_CLIENT_ROUTES="10.66.66.0/24" \
-WGR_CLIENT_DNS=9.9.9.9 \
   ./scripts/wg-peer.sh client laptop
 ```
 
-`WGR_CLIENT_ROUTES` is the useful one: the default sends *all* the client's
+`WGR_CLIENT_ROUTES` is the useful one: the default sends *all* of the client's
 traffic through the server, whereas `10.66.66.0/24` gives a split tunnel where
 only traffic between peers is routed.
+
+### Reaching a peer's LAN from elsewhere
+
+`--lan` only tells the *server* to route that subnet to the gateway peer.
+Any other peer that needs to reach hosts on it must also list that subnet in
+its own client-side `AllowedIPs` (`WGR_CLIENT_ROUTES` above) — otherwise its
+OS never routes that traffic into the tunnel in the first place. `add`/`update`
+print a reminder of this whenever a peer has a `--lan`.
 
 ### A note on secrets
 
