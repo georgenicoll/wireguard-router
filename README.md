@@ -8,6 +8,123 @@ The server is designed to be disposable: destroy it, recreate it on a different
 provider, and your clients keep working because they connect to the dynamic
 hostname rather than an IP address.
 
+## TL;DR: setting up a new server and peers
+
+Start to finish, on Linode. Swap `linode` for `aws`, `gcp` or `azure`
+throughout; only the credentials and provider-specific settings in step 3
+actually differ.
+
+**1. Install the tools.**
+
+```bash
+sudo apt install wireguard-tools          # wg genkey / genpsk / pubkey
+tofu version                              # https://opentofu.org/docs/intro/install/
+```
+
+**2. Create an SSH key, if you do not already have one.** The server allows
+key-based login only, so without this you cannot get in.
+
+```bash
+ssh-keygen -t ed25519 -C "wireguard-router"
+cat ~/.ssh/id_ed25519.pub                 # paste into ssh_public_key in step 3
+```
+
+**3. Create your config file and point the tooling at it.**
+
+```bash
+cp config.example.tfvars ~/private/wireguard-router.tfvars
+$EDITOR ~/private/wireguard-router.tfvars
+
+export WGR_CONFIG=~/private/wireguard-router.tfvars
+export WGR_STATE_DIR=~/private/wireguard-router-state   # keeps secrets out of the repo
+export LINODE_TOKEN=...                                 # cloud credentials
+```
+
+The values you must fill in: `ssh_public_key`, `dynu_hostname`, `dynu_username`,
+`dynu_password`, and `region` (or the equivalent location setting for another
+provider). Everything else has a working default, including
+non-default `ssh_port` (58022) and `wireguard_port` (47654). Leave the
+WireGuard key settings alone — step 5 generates them.
+
+Put the three `export` lines in your shell profile or a direnv `.envrc`, or
+you will be re-typing them every session.
+
+**4. Decide your tunnel addresses.** These are private addresses *inside* the
+VPN, unrelated to any real network. The default subnet is `10.66.66.0/24`, and
+the server takes `.1`:
+
+| Host | Tunnel address | Set where |
+| --- | --- | --- |
+| the server | `10.66.66.1/24` | `wireguard_address` (default, fine as-is) |
+| first peer | `10.66.66.2` | `wg-peer.sh add` |
+| second peer | `10.66.66.3` | `wg-peer.sh add` |
+
+Give every peer its own address. The script refuses duplicates.
+
+**5. Generate the server key and your peers.** One command per device:
+
+```bash
+./scripts/wg-peer.sh add laptop 10.66.66.2
+./scripts/wg-peer.sh add phone  10.66.66.3
+```
+
+Each prints a ready-to-use client config, and writes the keys into the store
+beside your config file. The server key is created once, on the first `add`.
+
+**6. Create the server.**
+
+```bash
+./wgr linode init
+./wgr linode apply
+```
+
+**7. Wait for it to finish configuring itself.** `apply` returns before
+cloud-init has finished, which takes a few minutes.
+
+```bash
+ssh -p 58022 wgadmin@$(./wgr linode output -raw public_ipv4)
+sudo cloud-init status --wait
+sudo wg show                              # should list your peers
+journalctl -u dynu-update.service -n 20   # should show "-> <your IP> (good ...)"
+```
+
+**8. Connect a client.** Reprint a config whenever you need it:
+
+```bash
+./scripts/wg-peer.sh client laptop
+```
+
+On Linux, save it as `/etc/wireguard/wg0.conf` and bring it up:
+
+```bash
+sudo install -m 600 /dev/stdin /etc/wireguard/wg0.conf < <(./scripts/wg-peer.sh client laptop)
+sudo wg-quick up wg0
+ping 10.66.66.1                           # the server, inside the tunnel
+```
+
+For a phone, render the same config as a QR code and scan it from the
+WireGuard app (`sudo apt install qrencode`):
+
+```bash
+./scripts/wg-peer.sh client phone | qrencode -t ansiutf8
+```
+
+**9. Adding a peer later.** Same command, then re-apply so the server accepts it:
+
+```bash
+./scripts/wg-peer.sh add tablet 10.66.66.4
+./wgr linode apply
+```
+
+This never touches the server key, so existing clients are unaffected.
+
+**10. Tear it down** when you no longer need it. The key store survives, so
+recreating later — on any provider — keeps every client working:
+
+```bash
+./wgr linode destroy
+```
+
 ## Design
 
 The provider-specific surface is deliberately tiny. Everything that actually
@@ -42,8 +159,9 @@ $EDITOR ~/private/wireguard-router.tfvars
 export WGR_CONFIG=~/private/wireguard-router.tfvars
 ```
 
-It holds your WireGuard private key and Dynu password, so it must live outside
-the repo. `.gitignore` refuses to track `*.tfvars` as a second line of defence.
+It holds your Dynu password, so it must live outside the repo. `.gitignore`
+refuses to track `*.tfvars` as a second line of defence. (Your WireGuard keys
+live in the key store, not in this file.)
 
 Optionally keep state outside the repo too — it also contains those secrets:
 
