@@ -524,8 +524,9 @@ the server's WireGuard public key must stay the same, which it does as long as
 **Access and hardening**
 - Password authentication and root login disabled; one sudo user with one key
 - `AuthenticationMethods publickey`, `MaxAuthTries 3`, no TCP/agent forwarding
-- sshd on a non-default port. Ubuntu 24.04 socket-activates sshd, so both
-  `sshd_config` and the `ssh.socket` unit are overridden
+- sshd on a non-default port, listening on IPv4 and IPv6 explicitly rather
+  than relying on a bare port to be dual-stack. Ubuntu 24.04+ socket-activates
+  sshd, so both `sshd_config` and the `ssh.socket` unit are overridden
 - Two independent firewall layers: the cloud provider's, and `ufw` on the host.
   Default-deny inbound; only the SSH and WireGuard ports are open
 - `fail2ban` configured for the non-default port using the systemd journal

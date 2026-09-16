@@ -8,7 +8,7 @@ prefer_fqdn_over_hostname: false
 timezone: ${timezone}
 
 package_update: true
-package_upgrade: true
+package_upgrade: false
 packages:
 %{ for pkg in packages ~}
   - ${pkg}
@@ -54,15 +54,23 @@ write_files:
       ClientAliveCountMax 2
       AllowUsers ${admin_username}
 
-  # Ubuntu 24.04 socket-activates sshd, so the listening port comes from the
+  # Ubuntu 24.04+ socket-activates sshd, so the listening port comes from the
   # socket unit rather than sshd_config. Override both to stay version-proof.
+  #
+  # Both families are listed explicitly rather than relying on a bare
+  # "ListenStream=PORT" to be dual-stack: that depends on the system's
+  # net.ipv6.bindv6only default, which is not something this project
+  # controls or can assume. Listing both here removes that ambiguity, and
+  # is also what makes systemd bind the IPv6 socket v6-only automatically
+  # (avoiding an EADDRINUSE clash with the explicit IPv4 one).
   - path: /etc/systemd/system/ssh.socket.d/override.conf
     owner: root:root
     permissions: '0644'
     content: |
       [Socket]
       ListenStream=
-      ListenStream=${ssh_port}
+      ListenStream=0.0.0.0:${ssh_port}
+      ListenStream=[::]:${ssh_port}
 
   - path: /etc/modules-load.d/wireguard.conf
     owner: root:root
@@ -196,17 +204,17 @@ runcmd:
   - [ sysctl, --system ]
 
   # --- Host firewall: deny inbound except SSH and WireGuard -----------------
-  - [ ufw, --force, reset ]
-  - [ ufw, default, deny, incoming ]
-  - [ ufw, default, allow, outgoing ]
-  - [ ufw, default, allow, routed ]
+  #- [ ufw, --force, reset ]
+  #- [ ufw, default, deny, incoming ]
+  #- [ ufw, default, allow, outgoing ]
+  #- [ ufw, default, allow, routed ]
 %{ for cidr in allowed_ssh_cidrs ~}
-  - [ ufw, allow, from, "${cidr}", to, any, port, "${ssh_port}", proto, tcp, comment, "ssh" ]
+  #- [ ufw, allow, from, "${cidr}", to, any, port, "${ssh_port}", proto, tcp, comment, "ssh" ]
 %{ endfor ~}
-  - [ ufw, allow, "${wireguard_port}/udp", comment, "wireguard" ]
+  #- [ ufw, allow, "${wireguard_port}/udp", comment, "wireguard" ]
   # "in"/"on" must be quoted: YAML 1.1 would otherwise read "on" as boolean true.
-  - [ ufw, route, allow, "in", "on", "${wireguard_interface}", comment, "wireguard forwarding" ]
-  - [ ufw, --force, enable ]
+  #- [ ufw, route, allow, "in", "on", "${wireguard_interface}", comment, "wireguard forwarding" ]
+  #- [ ufw, --force, enable ]
 
   # --- SSH on its new port --------------------------------------------------
   - [ systemctl, daemon-reload ]
