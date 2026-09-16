@@ -241,6 +241,12 @@ derive_default_dns() {
     config_value wireguard_dns
 }
 
+# The network-wide default client-side AllowedIPs from your config, if set
+# ("auto" or a literal CIDR list).
+derive_default_routes() {
+    config_value wireguard_client_routes
+}
+
 # --- Overlap checking ---------------------------------------------------------
 
 # Every address range a peer currently occupies (own_ip and, if present,
@@ -393,11 +399,14 @@ print_client_config() {
     echo "PublicKey = $(server_pubkey)"
     [[ -s "$dir/preshared.key" ]] && echo "PresharedKey = $(cat "$dir/preshared.key")"
     echo "Endpoint = $endpoint"
-    local routes
-    if [[ "${WGR_CLIENT_ROUTES:-}" == "auto" ]]; then
+    local routes routes_setting
+    routes_setting="${WGR_CLIENT_ROUTES:-$(derive_default_routes)}"
+    if [[ "$routes_setting" == "auto" ]]; then
         routes="$(derive_auto_routes "$name" | sort -u | paste -sd, - | sed 's/,/, /g')"
+    elif [[ -n "$routes_setting" ]]; then
+        routes="$routes_setting"
     else
-        routes="${WGR_CLIENT_ROUTES:-0.0.0.0/0, ::/0}"
+        routes="0.0.0.0/0, ::/0"
     fi
     echo "AllowedIPs = $routes"
     echo "PersistentKeepalive = 25"
@@ -544,13 +553,15 @@ cmd_list() {
         echo "Create one with: $PROG add <name> <own-ip>"
         return
     fi
-    echo "Key store:     $STORE"
-    echo "Server pubkey: $(server_pubkey)"
-    echo "Endpoint:      $(derive_endpoint)"
-    local default_dns
+    local default_dns default_routes
     default_dns="$(derive_default_dns)"
-    echo "Default DNS:   ${default_dns:-(none set; peers fall back to 1.1.1.1)}"
-    echo "Generated:     $TFVARS$([[ -f "$TFVARS" ]] || echo '  (missing - run '"$PROG"' regen)')"
+    default_routes="$(derive_default_routes)"
+    printf '%-16s%s\n' "Key store:" "$STORE"
+    printf '%-16s%s\n' "Server pubkey:" "$(server_pubkey)"
+    printf '%-16s%s\n' "Endpoint:" "$(derive_endpoint)"
+    printf '%-16s%s\n' "Default DNS:" "${default_dns:-(none set; peers fall back to 1.1.1.1)}"
+    printf '%-16s%s\n' "Default routes:" "${default_routes:-(none set; peers fall back to full tunnel)}"
+    printf '%-16s%s\n' "Generated:" "$TFVARS$([[ -f "$TFVARS" ]] || echo '  (missing - run '"$PROG"' regen)')"
     echo
     printf '%-20s %-18s %-18s %s\n' "PEER" "OWN IP" "LAN SUBNET" "DNS OVERRIDE"
     while IFS= read -r name; do

@@ -155,6 +155,19 @@ variable "wireguard_dns" {
   default     = ""
 }
 
+variable "wireguard_client_routes" {
+  description = <<-EOT
+    Default client-side AllowedIPs handed to peers in their client config.
+    "auto" computes the tunnel network plus every other peer's own address
+    and LAN subnet (see scripts/wg-peer.sh), so a mesh of site-to-site peers
+    can reach each other without also routing general internet traffic
+    through the server. A literal CIDR list is used as-is. Empty means full
+    tunnel: "0.0.0.0/0, ::/0". Overridden per invocation by WGR_CLIENT_ROUTES.
+  EOT
+  type        = string
+  default     = ""
+}
+
 # --- Dynu dynamic DNS -------------------------------------------------------
 
 variable "dynu_hostname" {
