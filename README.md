@@ -542,6 +542,12 @@ the server's WireGuard public key must stay the same, which it does as long as
 - `image` defaults to Ubuntu 24.04 LTS. Bump it in your config file to move to a
   newer release; the module pins nothing to that version.
 - The state file contains secrets. Keep it private (see `WGR_STATE_DIR`).
+- Linode and AWS cap decoded user-data at 16384 bytes, which a cloud-init
+  document with a handful of site-to-site peers can exceed (Linode: `[400]
+  decoded user_data must not exceed 16384 bytes`). Both platform modules
+  gzip-compress it first, which cloud-init decompresses automatically; a
+  two-peer setup with routed LANs runs at roughly half that budget, so there
+  is real headroom, but a very large number of peers could still hit it.
 - Adding a fifth provider means writing one module under `modules/platform/`
   with the same four inputs and four outputs, and copying a stack directory.
 

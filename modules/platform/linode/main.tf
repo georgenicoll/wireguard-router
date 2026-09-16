@@ -10,7 +10,12 @@ resource "linode_instance" "this" {
   tags = [for k, v in var.tags : "${k}:${v}"]
 
   metadata {
-    user_data = base64encode(var.user_data)
+    # Linode caps decoded user_data at 16384 bytes, and a cloud-init document
+    # with a couple of site-to-site peers clears that easily. Gzipping first
+    # is the standard trick for this: cloud-init auto-detects the gzip magic
+    # bytes and decompresses transparently, regardless of which cloud
+    # delivered it, so nothing on the server side needs to know this happened.
+    user_data = base64gzip(var.user_data)
   }
 
   lifecycle {
