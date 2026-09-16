@@ -202,7 +202,7 @@ export LINODE_TOKEN=...   # or set linode_token in your config file
 | `WGR_STATE_DIR` | Keep state outside the repo, one file per platform. Recommended. |
 | `WGR_ENDPOINT` | Override the `Endpoint` written into client configs. |
 | `WGR_CLIENT_ROUTES` | Override client `AllowedIPs`. Default `0.0.0.0/0, ::/0` (full tunnel). |
-| `WGR_CLIENT_DNS` | Override client `DNS`. Default `1.1.1.1`. |
+| `WGR_CLIENT_DNS` | Ad-hoc override for one `client` printout, outranking a peer's own `--dns` and `wireguard_dns` - see [DNS](#dns). |
 
 Worth putting the first three in your shell profile or a direnv `.envrc`.
 
@@ -482,6 +482,9 @@ the server's WireGuard public key must stay the same, which it does as long as
 - Clamps TCP MSS to the path MTU, avoiding the classic "SSH works but web pages
   hang" symptom inside a tunnel
 - Listens on a non-default UDP port
+- A peer's `AllowedIPs` in `wg0.conf` is its own address plus, for a
+  site-to-site gateway, the whole LAN subnet behind it — see
+  [Two kinds of peer](#two-kinds-of-peer)
 
 **Dynamic DNS**
 - Authenticates with a Dynu **API key** against their v2 REST API. The key is
