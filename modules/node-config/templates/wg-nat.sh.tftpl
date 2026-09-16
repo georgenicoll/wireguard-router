@@ -1,0 +1,41 @@
+#!/bin/sh
+# Apply or remove forwarding + NAT rules for a WireGuard interface.
+#
+# The upstream interface name differs between clouds (eth0, ens4, enX0...), so
+# it is discovered from the default route at runtime rather than baked in.
+# Usage: wg-nat {up|down} <wg-interface>
+set -eu
+
+ACTION="$1"
+WG="$2"
+
+WAN=$(ip -4 route show default 2>/dev/null | awk '/default/ {print $5; exit}')
+if [ -z "$WAN" ]; then
+    echo "wg-nat: could not determine the default-route interface" >&2
+    exit 1
+fi
+
+WAN6=$(ip -6 route show default 2>/dev/null | awk '/default/ {print $5; exit}')
+
+case "$ACTION" in
+up)   V4_OP="-I"; V6_OP="-I" ;;
+down) V4_OP="-D"; V6_OP="-D" ;;
+*)    echo "wg-nat: usage: wg-nat {up|down} <interface>" >&2; exit 2 ;;
+esac
+
+# Allow tunnel traffic to be routed out, and return traffic back in.
+iptables $V4_OP FORWARD -i "$WG" -o "$WAN" -j ACCEPT
+iptables $V4_OP FORWARD -i "$WAN" -o "$WG" -m state --state RELATED,ESTABLISHED -j ACCEPT
+iptables -t nat $V4_OP POSTROUTING -o "$WAN" -j MASQUERADE
+
+# Clamp TCP MSS: without this, path-MTU-sensitive sites hang inside the tunnel.
+iptables -t mangle $V4_OP FORWARD -i "$WG" -p tcp --tcp-flags SYN,RST SYN \
+    -j TCPMSS --clamp-mss-to-pmtu
+
+if [ -n "$WAN6" ]; then
+    ip6tables $V6_OP FORWARD -i "$WG" -o "$WAN6" -j ACCEPT || true
+    ip6tables $V6_OP FORWARD -i "$WAN6" -o "$WG" -m state --state RELATED,ESTABLISHED -j ACCEPT || true
+    ip6tables -t nat $V6_OP POSTROUTING -o "$WAN6" -j MASQUERADE || true
+fi
+
+exit 0

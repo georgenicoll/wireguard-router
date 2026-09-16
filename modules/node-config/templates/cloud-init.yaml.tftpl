@@ -1,0 +1,242 @@
+#cloud-config
+# Managed by OpenTofu. This document is identical across every cloud provider;
+# only the surrounding VM and firewall resources differ.
+
+hostname: ${node_name}
+fqdn: ${dynu_hostname}
+prefer_fqdn_over_hostname: false
+timezone: ${timezone}
+
+package_update: true
+package_upgrade: true
+packages:
+%{ for pkg in packages ~}
+  - ${pkg}
+%{ endfor ~}
+
+# Password logins are disabled everywhere; key-based access to one sudo user only.
+ssh_pwauth: false
+disable_root: true
+
+users:
+  - name: ${admin_username}
+    groups: [sudo, adm]
+    shell: /bin/bash
+    lock_passwd: true
+    sudo: "ALL=(ALL) NOPASSWD:ALL"
+    ssh_authorized_keys:
+      - "${ssh_public_key}"
+
+write_files:
+  # Drop-in is named 10- deliberately: sshd honours the *first* value it sees
+  # for most keywords, and the distro's own 50-cloud-init.conf would otherwise win.
+  - path: /etc/ssh/sshd_config.d/10-hardening.conf
+    owner: root:root
+    permissions: '0644'
+    content: |
+      Port ${ssh_port}
+      Protocol 2
+      PermitRootLogin no
+      PasswordAuthentication no
+      PermitEmptyPasswords no
+      KbdInteractiveAuthentication no
+      ChallengeResponseAuthentication no
+      PubkeyAuthentication yes
+      AuthenticationMethods publickey
+      UsePAM yes
+      X11Forwarding no
+      AllowAgentForwarding no
+      AllowTcpForwarding no
+      MaxAuthTries 3
+      MaxSessions 4
+      LoginGraceTime 30
+      ClientAliveInterval 300
+      ClientAliveCountMax 2
+      AllowUsers ${admin_username}
+
+  # Ubuntu 24.04 socket-activates sshd, so the listening port comes from the
+  # socket unit rather than sshd_config. Override both to stay version-proof.
+  - path: /etc/systemd/system/ssh.socket.d/override.conf
+    owner: root:root
+    permissions: '0644'
+    content: |
+      [Socket]
+      ListenStream=
+      ListenStream=${ssh_port}
+
+  - path: /etc/modules-load.d/wireguard.conf
+    owner: root:root
+    permissions: '0644'
+    content: |
+      wireguard
+
+  - path: /etc/sysctl.d/99-wireguard-router.conf
+    owner: root:root
+    permissions: '0644'
+    content: |
+      # Routing between the tunnel and the internet.
+      net.ipv4.ip_forward = 1
+      net.ipv6.conf.all.forwarding = 1
+
+      # Basic network hardening.
+      net.ipv4.conf.all.accept_redirects = 0
+      net.ipv4.conf.all.send_redirects = 0
+      net.ipv4.conf.default.accept_redirects = 0
+      net.ipv6.conf.all.accept_redirects = 0
+      net.ipv4.conf.all.accept_source_route = 0
+      net.ipv6.conf.all.accept_source_route = 0
+      net.ipv4.conf.all.rp_filter = 1
+      net.ipv4.conf.default.rp_filter = 1
+      net.ipv4.tcp_syncookies = 1
+      net.ipv4.icmp_echo_ignore_broadcasts = 1
+      net.ipv4.conf.all.log_martians = 1
+
+  - path: /etc/wireguard/${wireguard_interface}.conf
+    owner: root:root
+    permissions: '0600'
+    encoding: b64
+    content: ${wireguard_config_b64}
+
+  - path: /usr/local/sbin/wg-nat
+    owner: root:root
+    permissions: '0755'
+    encoding: b64
+    content: ${wg_nat_script_b64}
+
+  - path: /usr/local/sbin/dynu-update
+    owner: root:root
+    permissions: '0755'
+    encoding: b64
+    content: ${dynu_script_b64}
+
+  - path: /etc/dynu/dynu.env
+    owner: root:root
+    permissions: '0600'
+    content: |
+      DYNU_USERNAME='${dynu_username_sh}'
+      DYNU_PASSWORD='${dynu_password_sh}'
+
+  - path: /etc/systemd/system/dynu-update.service
+    owner: root:root
+    permissions: '0644'
+    content: |
+      [Unit]
+      Description=Publish the current public IP to Dynu dynamic DNS
+      After=network-online.target
+      Wants=network-online.target
+
+      [Service]
+      Type=oneshot
+      ExecStart=/usr/local/sbin/dynu-update
+      User=root
+      Nice=10
+
+      # This unit only needs to read its credentials and write its IP cache.
+      # StateDirectory makes systemd create /var/lib/dynu with the right
+      # ownership, so the unit works even on a first, pre-mkdir run.
+      StateDirectory=dynu
+      PrivateTmp=yes
+      ProtectSystem=strict
+      ProtectHome=yes
+      NoNewPrivileges=yes
+
+      [Install]
+      WantedBy=multi-user.target
+
+  - path: /etc/systemd/system/dynu-update.timer
+    owner: root:root
+    permissions: '0644'
+    content: |
+      [Unit]
+      Description=Refresh the Dynu dynamic DNS record periodically
+
+      [Timer]
+      OnBootSec=30s
+      OnUnitActiveSec=${dynu_update_interval}
+      AccuracySec=30s
+      Persistent=true
+
+      [Install]
+      WantedBy=timers.target
+
+  # fail2ban must be told the non-default port, and on 24.04 it reads the
+  # journal rather than /var/log/auth.log.
+  - path: /etc/fail2ban/jail.d/sshd.local
+    owner: root:root
+    permissions: '0644'
+    content: |
+      [sshd]
+      enabled = true
+      port = ${ssh_port}
+      backend = systemd
+      maxretry = 4
+      findtime = 10m
+      bantime = 1h
+
+  - path: /etc/apt/apt.conf.d/20auto-upgrades
+    owner: root:root
+    permissions: '0644'
+    content: |
+      APT::Periodic::Update-Package-Lists "1";
+      APT::Periodic::Unattended-Upgrade "1";
+      APT::Periodic::AutocleanInterval "7";
+
+runcmd:
+  # --- Confirm the kernel can actually do WireGuard -------------------------
+  - [ modprobe, wireguard ]
+  - |
+    if [ ! -d /sys/module/wireguard ]; then
+      echo "FATAL: the running kernel ($(uname -r)) has no WireGuard support" >&2
+      exit 1
+    fi
+    echo "WireGuard kernel module present: $(cat /sys/module/wireguard/version 2>/dev/null || echo builtin)"
+
+  # --- Kernel networking ----------------------------------------------------
+  - [ sysctl, --system ]
+
+  # --- Host firewall: deny inbound except SSH and WireGuard -----------------
+  - [ ufw, --force, reset ]
+  - [ ufw, default, deny, incoming ]
+  - [ ufw, default, allow, outgoing ]
+  - [ ufw, default, allow, routed ]
+%{ for cidr in allowed_ssh_cidrs ~}
+  - [ ufw, allow, from, "${cidr}", to, any, port, "${ssh_port}", proto, tcp, comment, "ssh" ]
+%{ endfor ~}
+  - [ ufw, allow, "${wireguard_port}/udp", comment, "wireguard" ]
+  # "in"/"on" must be quoted: YAML 1.1 would otherwise read "on" as boolean true.
+  - [ ufw, route, allow, "in", "on", "${wireguard_interface}", comment, "wireguard forwarding" ]
+  - [ ufw, --force, enable ]
+
+  # --- SSH on its new port --------------------------------------------------
+  - [ systemctl, daemon-reload ]
+  - |
+    if systemctl is-enabled ssh.socket >/dev/null 2>&1; then
+      systemctl restart ssh.socket
+    fi
+    systemctl restart ssh || systemctl restart sshd
+
+  # --- Bring up the tunnel --------------------------------------------------
+  # Started after ufw so that wg-nat's rules sit on top of ufw's chains.
+  - [ systemctl, enable, --now, "wg-quick@${wireguard_interface}" ]
+
+  # --- Dynamic DNS ----------------------------------------------------------
+  - [ mkdir, -p, /var/lib/dynu ]
+  - [ systemctl, enable, --now, dynu-update.timer ]
+  - [ systemctl, start, dynu-update.service ]
+
+  # --- Intrusion prevention + unattended security updates -------------------
+  - [ systemctl, enable, --now, fail2ban ]
+  - [ systemctl, enable, --now, unattended-upgrades ]
+
+  - |
+    echo "=============================================="
+    wg show || true
+    systemctl --no-pager --failed || true
+    echo "wireguard-router provisioning complete"
+    echo "=============================================="
+
+power_state:
+  mode: reboot
+  condition: test -f /var/run/reboot-required
+  delay: 1
+  message: Rebooting to activate a kernel update

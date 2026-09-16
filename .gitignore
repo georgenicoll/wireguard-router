@@ -1,0 +1,24 @@
+# OpenTofu / Terraform
+.terraform/
+# Note: .terraform.lock.hcl is intentionally NOT ignored - commit it so
+# provider versions are reproducible.
+*.tfstate
+*.tfstate.*
+crash.log
+crash.*.log
+override.tf
+override.tf.json
+*_override.tf
+*_override.tf.json
+.terraformrc
+terraform.rc
+tofu.rc
+
+# Never commit real configuration or secrets. Only *.example.tfvars is tracked.
+*.tfvars
+*.tfvars.json
+!*.example.tfvars
+*.auto.tfvars
+
+# Local state of the external config location
+.config-path

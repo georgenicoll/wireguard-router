@@ -1,0 +1,91 @@
+#!/usr/bin/env bash
+# Thin wrapper around tofu that selects a cloud stack and injects the external
+# config file, so that day-to-day use is:
+#
+#   ./wgr linode init
+#   ./wgr linode plan
+#   ./wgr linode apply
+#   ./wgr linode output
+#   ./wgr linode destroy
+#
+# Switching cloud means changing one word:  ./wgr gcp apply
+#
+# Configuration:
+#   WGR_CONFIG     path to your private .tfvars file (required for plan/apply/destroy)
+#   WGR_STATE_DIR  optional directory to keep state in, instead of the stack
+#                  directory. State contains your WireGuard private key and
+#                  Dynu password, so a private, backed-up location is sensible.
+set -euo pipefail
+
+REPO_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+
+usage() {
+    cat >&2 <<USAGE
+Usage: ./wgr <platform> <tofu-command> [args...]
+
+Platforms: $(cd "$REPO_DIR/stacks" && ls -d */ | tr -d '/' | tr '\n' ' ')
+
+Examples:
+  ./wgr linode init
+  ./wgr linode plan
+  ./wgr linode apply
+  ./wgr linode output -raw wireguard_endpoint
+  ./wgr linode destroy
+USAGE
+    exit 2
+}
+
+[[ $# -lt 2 ]] && usage
+
+PLATFORM="$1"; shift
+COMMAND="$1"; shift
+
+STACK_DIR="$REPO_DIR/stacks/$PLATFORM"
+if [[ ! -d "$STACK_DIR" ]]; then
+    echo "error: unknown platform '$PLATFORM' (no stacks/$PLATFORM)" >&2
+    usage
+fi
+
+command -v tofu >/dev/null 2>&1 || {
+    echo "error: 'tofu' is not on PATH. See https://opentofu.org/docs/intro/install/" >&2
+    exit 1
+}
+
+ARGS=()
+
+# Commands that consume variables need the external config file.
+case "$COMMAND" in
+plan | apply | destroy | refresh | import | console)
+    if [[ -z "${WGR_CONFIG:-}" ]]; then
+        cat >&2 <<MSG
+error: WGR_CONFIG is not set.
+
+Point it at your private config file, for example:
+  cp config.example.tfvars ~/private/wireguard-router.tfvars
+  export WGR_CONFIG=~/private/wireguard-router.tfvars
+MSG
+        exit 1
+    fi
+    CONFIG_PATH="$(cd "$(dirname "$WGR_CONFIG")" && pwd)/$(basename "$WGR_CONFIG")"
+    if [[ ! -r "$CONFIG_PATH" ]]; then
+        echo "error: cannot read config file: $CONFIG_PATH" >&2
+        exit 1
+    fi
+    # Absolute, because -chdir changes how relative paths resolve.
+    ARGS+=("-var-file=$CONFIG_PATH")
+    ;;
+esac
+
+# Optional external state location, one state file per platform.
+if [[ -n "${WGR_STATE_DIR:-}" ]]; then
+    mkdir -p "$WGR_STATE_DIR"
+    STATE_DIR_ABS="$(cd "$WGR_STATE_DIR" && pwd)"
+    case "$COMMAND" in
+    plan | apply | destroy | refresh | import | output | show | state | taint | untaint)
+        ARGS+=("-state=$STATE_DIR_ABS/$PLATFORM.tfstate")
+        ;;
+    esac
+fi
+
+set -x
+exec tofu -chdir="$STACK_DIR" "$COMMAND" "${ARGS[@]}" "$@"

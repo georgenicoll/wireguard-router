@@ -1,0 +1,25 @@
+# Managed by OpenTofu. Local edits are overwritten on rebuild.
+[Interface]
+Address = ${address}%{ if address_v6 != "" }, ${address_v6}%{ endif }
+ListenPort = ${listen_port}
+PrivateKey = ${private_key}
+%{ if mtu > 0 ~}
+MTU = ${mtu}
+%{ endif ~}
+%{ if nat ~}
+PostUp = /usr/local/sbin/wg-nat up %i
+PostDown = /usr/local/sbin/wg-nat down %i
+%{ endif ~}
+%{ for peer in peers ~}
+
+# ${peer.name}
+[Peer]
+PublicKey = ${peer.public_key}
+%{ if try(peer.preshared_key, null) != null && try(peer.preshared_key, "") != "" ~}
+PresharedKey = ${peer.preshared_key}
+%{ endif ~}
+AllowedIPs = ${join(", ", peer.allowed_ips)}
+%{ if try(peer.persistent_keepalive, null) != null ~}
+PersistentKeepalive = ${peer.persistent_keepalive}
+%{ endif ~}
+%{ endfor ~}
