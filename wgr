@@ -11,7 +11,10 @@
 # Switching cloud means changing one word:  ./wgr gcp apply
 #
 # Configuration:
-#   WGR_CONFIG     path to your private .tfvars file (required for plan/apply/destroy)
+#   WGR_CONFIG     path to your private, cloud-agnostic .tfvars file (required
+#                  for plan/apply/destroy). Its directory must also contain a
+#                  <platform>.tfvars file (e.g. linode.tfvars, gcp.tfvars) with
+#                  that cloud's own settings - see *.example.tfvars.
 #   WGR_KEYS       optional key store location, managed by scripts/wg-peer.sh.
 #                  Defaults to <dir of WGR_CONFIG>/wireguard-router-keys. When
 #                  it contains wireguard.generated.tfvars, that file is passed
@@ -77,6 +80,22 @@ MSG
     fi
     # Absolute, because -chdir changes how relative paths resolve.
     ARGS+=("-var-file=$CONFIG_PATH")
+
+    # Cloud-specific settings live in their own file next to the main config,
+    # named after the platform (e.g. linode.tfvars, gcp.tfvars). Keeping them
+    # out of the main config means switching cloud never risks a stray
+    # variable from another platform's block breaking the plan.
+    PLATFORM_CONFIG="$(dirname "$CONFIG_PATH")/$PLATFORM.tfvars"
+    if [[ ! -r "$PLATFORM_CONFIG" ]]; then
+        cat >&2 <<MSG
+error: cannot read $PLATFORM_CONFIG
+
+Each platform needs its own settings file next to your main config, for example:
+  cp $PLATFORM.example.tfvars $(dirname "$CONFIG_PATH")/$PLATFORM.tfvars
+MSG
+        exit 1
+    fi
+    ARGS+=("-var-file=$PLATFORM_CONFIG")
 
     # The key store's generated tfvars supplies wireguard_private_key and
     # wireguard_peers. It is passed *after* the main config so that its values

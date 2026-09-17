@@ -41,6 +41,11 @@ PROG="$(basename "$0")"
 die() { echo "error: $*" >&2; exit 1; }
 note() { echo "$*" >&2; }
 
+note "WGR_CONFIG=${WGR_CONFIG:-<not set>}"
+note "WGR_KEYS=${WGR_KEYS:-<not set>}"
+[[ -n "${WGR_CONFIG:-}" || -n "${WGR_KEYS:-}" ]] ||
+    die "set WGR_CONFIG (path to your .tfvars file) or WGR_KEYS (key store location)"
+
 command -v wg >/dev/null 2>&1 ||
     die "'wg' not found. Install it with: sudo apt install wireguard-tools"
 command -v python3 >/dev/null 2>&1 ||
