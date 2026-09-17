@@ -10,9 +10,9 @@ hostname rather than an IP address.
 
 ## TL;DR: setting up a new server and peers
 
-Start to finish, on Linode. Swap `linode` for `aws`, `gcp` or `azure`
-throughout; only the credentials and provider-specific settings in step 3
-actually differ.
+Start to finish, on Linode. Swap `linode` for `aws`, `gcp`, `azure` or
+`digitalocean` throughout; only the credentials and provider-specific settings
+in step 3 actually differ.
 
 **1. Install the tools.**
 
@@ -496,6 +496,7 @@ Per-provider extras are the only additional work:
 | AWS | `AWS_PROFILE` / standard SDK env vars | — | `t4g.nano` (arm64) |
 | GCP | `gcloud auth application-default login` | `gcp_project` | `e2-micro` |
 | Azure | `az login` | — (`azure_subscription_id` optional) | `Standard_B1ls` |
+| DigitalOcean | `DIGITALOCEAN_TOKEN` | — | `s-1vcpu-512mb-10gb` |
 
 Each stack declares only its own platform variables, so remove other providers'
 blocks from your config file (or keep separate files per provider) — OpenTofu
@@ -562,7 +563,7 @@ the server's WireGuard public key must stay the same, which it does as long as
   gzip-compress it first, which cloud-init decompresses automatically; a
   two-peer setup with routed LANs runs at roughly half that budget, so there
   is real headroom, but a very large number of peers could still hit it.
-- Adding a fifth provider means writing one module under `modules/platform/`
+- Adding another provider means writing one module under `modules/platform/`
   with the same four inputs and four outputs, and copying a stack directory.
 
 ## Layout
@@ -573,6 +574,6 @@ config.example.tfvars        template for your private config file
 scripts/wg-peer.sh           key store + client config management
 shared/                      cloud-agnostic variables and outputs (symlinked)
 modules/node-config/         all server configuration, provider-independent
-modules/platform/{linode,aws,gcp,azure}/
-stacks/{linode,aws,gcp,azure}/
+modules/platform/{linode,aws,gcp,azure,digitalocean}/
+stacks/{linode,aws,gcp,azure,digitalocean}/
 ```
