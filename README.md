@@ -11,8 +11,8 @@ hostname rather than an IP address.
 ## TL;DR: setting up a new server and peers
 
 Start to finish, on Linode. Swap `linode` for `aws`, `gcp`, `azure` or
-`digitalocean` throughout; only the credentials and provider-specific settings
-in step 3 actually differ.
+`digitalocean` throughout; only the credentials and platform-specific file in
+step 3 actually differ.
 
 **1. Install the tools.**
 
@@ -29,22 +29,29 @@ ssh-keygen -t ed25519 -C "wireguard-router"
 cat ~/.ssh/id_ed25519.pub                 # add to ssh_public_keys in step 3
 ```
 
-**3. Create your config file and point the tooling at it.**
+**3. Create your config files and point the tooling at them.**
+
+Two files: a cloud-agnostic main config, and a platform-specific one with
+`linode_token`/`region`-type settings. Both must live in the same directory —
+`./wgr` looks for the platform file (`linode.tfvars`, `aws.tfvars`, ...) next
+to whatever `WGR_CONFIG` points at.
 
 ```bash
 cp config.example.tfvars ~/private/wireguard-router.tfvars
-$EDITOR ~/private/wireguard-router.tfvars
+cp linode.example.tfvars ~/private/linode.tfvars
+$EDITOR ~/private/wireguard-router.tfvars ~/private/linode.tfvars
 
 export WGR_CONFIG=~/private/wireguard-router.tfvars
 export WGR_STATE_DIR=~/private/wireguard-router-state   # keeps secrets out of the repo
 export LINODE_TOKEN=...                                 # cloud credentials
 ```
 
-The values you must fill in: `ssh_public_keys`, `dynu_hostname`, `dynu_api_key`,
-and `region` (or the equivalent location setting for another provider).
-Everything else has a working default, including
-non-default `ssh_port` (58022) and `wireguard_port` (47654). Leave the
-WireGuard key settings alone — step 5 generates them.
+The values you must fill in: `ssh_public_keys`, `dynu_hostname` and
+`dynu_api_key` in the main config, and `region` (or the equivalent location
+setting for another provider) in the platform file. Everything else has a
+working default, including non-default `ssh_port` (58022) and
+`wireguard_port` (47654). Leave the WireGuard key settings alone — step 5
+generates them.
 
 Put the three `export` lines in your shell profile or a direnv `.envrc`, or
 you will be re-typing them every session.
@@ -171,17 +178,27 @@ byte-for-byte identically configured.
 
 ## One-time setup
 
-**1. Create your config file, outside this repository.**
+**1. Create your config files, outside this repository.**
 
 ```bash
 cp config.example.tfvars ~/private/wireguard-router.tfvars
-$EDITOR ~/private/wireguard-router.tfvars
+cp linode.example.tfvars ~/private/linode.tfvars   # one per platform you use
+$EDITOR ~/private/wireguard-router.tfvars ~/private/linode.tfvars
 export WGR_CONFIG=~/private/wireguard-router.tfvars
 ```
 
-It holds your Dynu password, so it must live outside the repo. `.gitignore`
-refuses to track `*.tfvars` as a second line of defence. (Your WireGuard keys
-live in the key store, not in this file.)
+The main config is cloud-agnostic and holds your Dynu password, so it must
+live outside the repo. `.gitignore` refuses to track `*.tfvars` as a second
+line of defence. (Your WireGuard keys live in the key store, not in either
+file.)
+
+Cloud-specific settings (region/zone, instance size, image, credentials, ...)
+go in the second file instead, named after the platform and placed *next to*
+your main config — `./wgr` looks for `<platform>.tfvars` in whatever
+directory `WGR_CONFIG` points at, so `./wgr linode ...` loads `linode.tfvars`,
+`./wgr gcp ...` loads `gcp.tfvars`, and so on. You only need to create the
+file for the platform(s) you actually use; see
+[Switching cloud provider](#switching-cloud-provider).
 
 Optionally keep state outside the repo too — it also contains those secrets:
 
@@ -199,7 +216,7 @@ export WGR_STATE_DIR=~/private/wireguard-router-state
 **3. Provide cloud credentials.** For Linode:
 
 ```bash
-export LINODE_TOKEN=...   # or set linode_token in your config file
+export LINODE_TOKEN=...   # or set linode_token in your linode.tfvars
 ```
 
 ## Environment variables
@@ -321,14 +338,16 @@ Back this directory up. It is the only copy of your keys, and losing
 
 ### How it reaches OpenTofu
 
-`wgr` passes two `-var-file` flags: your main config first, then the generated
-file. Later files win in OpenTofu, so the store is authoritative for
-`wireguard_private_key` and `wireguard_peers`. That is why those two settings
-are absent from `config.example.tfvars` — if you do set them there, `wgr`
-prints a warning that the generated file is overriding you.
+`wgr` passes three `-var-file` flags: your main config, then your platform's
+own file (see [Switching cloud provider](#switching-cloud-provider)), then the
+generated file from the key store. Later files win in OpenTofu, so the store
+is authoritative for `wireguard_private_key` and `wireguard_peers`. That is
+why those two settings are absent from `config.example.tfvars` — if you do
+set them there, `wgr` prints a warning that the generated file is overriding
+you.
 
 ```
-tofu ... -var-file=<your config> -var-file=<store>/wireguard.generated.tfvars
+tofu ... -var-file=<your config> -var-file=<platform>.tfvars -var-file=<store>/wireguard.generated.tfvars
 ```
 
 The generated file is plain HCL, so you can always read exactly what tofu will
@@ -480,10 +499,17 @@ by hostname.
 
 ## Switching cloud provider
 
-Change one word. The same config file drives every stack:
+Change one word. The same cloud-agnostic main config drives every stack; each
+platform's own settings live in their own `<platform>.tfvars` file next to
+it (see [One-time setup](#one-time-setup)), so there is nothing in the main
+config to edit:
 
 ```bash
 ./wgr linode destroy
+
+cp gcp.example.tfvars "$(dirname "$WGR_CONFIG")/gcp.tfvars"   # first time only
+$EDITOR "$(dirname "$WGR_CONFIG")/gcp.tfvars"
+
 ./wgr gcp init
 ./wgr gcp apply
 ```
@@ -498,9 +524,10 @@ Per-provider extras are the only additional work:
 | Azure | `az login` | — (`azure_subscription_id` optional) | `Standard_B1ls` |
 | DigitalOcean | `DIGITALOCEAN_TOKEN` | — | `s-1vcpu-512mb-10gb` |
 
-Each stack declares only its own platform variables, so remove other providers'
-blocks from your config file (or keep separate files per provider) — OpenTofu
-rejects variables a stack does not declare.
+Each stack declares only its own platform variables, and `./wgr` passes only
+the one `<platform>.tfvars` matching whichever platform you invoke it with —
+so a setting left over from another provider's file can never leak into the
+wrong plan, and there is nothing to remove when you switch.
 
 Because the endpoint is a dynamic hostname and the Dynu client re-registers on
 boot, clients follow the server to its new provider with no config change. Only
@@ -570,7 +597,9 @@ the server's WireGuard public key must stay the same, which it does as long as
 
 ```
 wgr                          driver script: ./wgr <cloud> <tofu command>
-config.example.tfvars        template for your private config file
+config.example.tfvars        template for your private, cloud-agnostic config file
+{linode,aws,gcp,azure,digitalocean}.example.tfvars
+                              template for each platform's own settings file
 scripts/wg-peer.sh           key store + client config management
 shared/                      cloud-agnostic variables and outputs (symlinked)
 modules/node-config/         all server configuration, provider-independent
