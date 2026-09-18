@@ -16,8 +16,19 @@ data "aws_subnets" "available" {
   }
 }
 
+# Random rather than sort(...)[0]: EC2 capacity shortages are per-AZ and
+# transient, so a fixed pick can keep hitting the same short-on-capacity AZ.
+# The result is stored in state and stays fixed across plain re-applies; to
+# retry with a different AZ after an InsufficientInstanceCapacity error,
+# destroy and re-apply.
+resource "random_shuffle" "subnet" {
+  count        = var.subnet_id == "" ? 1 : 0
+  input        = data.aws_subnets.available[0].ids
+  result_count = 1
+}
+
 locals {
-  subnet_id = var.subnet_id != "" ? var.subnet_id : sort(data.aws_subnets.available[0].ids)[0]
+  subnet_id = var.subnet_id != "" ? var.subnet_id : random_shuffle.subnet[0].result[0]
 }
 
 data "aws_ami" "ubuntu" {
@@ -113,6 +124,9 @@ resource "aws_instance" "this" {
   tags = merge(var.tags, { Name = var.node_name })
 
   lifecycle {
-    ignore_changes = [ami]
+    # ami: see the AMI data source above. subnet_id: a later -replace of
+    # random_shuffle.subnet (to retry a different AZ) must not move an
+    # instance that's already running.
+    ignore_changes = [ami, subnet_id]
   }
 }
