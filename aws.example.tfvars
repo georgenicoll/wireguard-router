@@ -17,4 +17,6 @@ aws_region    = "eu-west-2" # London
 instance_type = "t4g.nano"  # cheapest current generation, arm64
 architecture  = "arm64"
 vpc_id        = ""          # empty = the account's default VPC
-subnet_id     = ""          # empty = pick a subnet automatically
+subnet_id     = ""          # empty = pick a random subnet/AZ automatically.
+                            # On InsufficientInstanceCapacity, destroy and
+                            # re-apply to retry with a different AZ.
