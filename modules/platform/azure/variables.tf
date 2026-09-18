@@ -28,9 +28,9 @@ variable "location" {
 }
 
 variable "vm_size" {
-  description = "Standard_B1ls is the cheapest Linux size (1 vCPU burstable, 0.5 GiB)."
+  description = "Standard_B2ts_v2 is a cheap burstable Linux size (2 vCPU, 1 GiB). The older v1 Bs family (B1ls etc.) is NotAvailableForSubscription on some subscriptions/regions - see AZURE_SETUP.md."
   type        = string
-  default     = "Standard_B1ls"
+  default     = "Standard_B2ts_v2"
 }
 
 variable "image" {
