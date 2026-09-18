@@ -12,7 +12,7 @@ variable "azure_location" {
 }
 
 variable "vm_size" {
-  description = "Standard_B1ls is the cheapest Linux size."
+  description = "Standard_B2ts_v2 is a cheap burstable Linux size. The older v1 Bs family (B1ls etc.) is NotAvailableForSubscription on some subscriptions/regions - see AZURE_SETUP.md."
   type        = string
-  default     = "Standard_B1ls"
+  default     = "Standard_B2ts_v2"
 }
