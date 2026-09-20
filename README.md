@@ -158,7 +158,8 @@ configures the machine lives in one cloud-agnostic module:
 
 | Path | Role |
 | --- | --- |
-| `modules/node-config/` | Renders the whole cloud-init document: WireGuard, Dynu client, firewall, SSH hardening. **No provider-specific logic.** |
+| `modules/node-config/` | Renders the whole cloud-init document: WireGuard, Dynu client, firewall, SSH hardening, login banner. **No provider-specific logic.** |
+| `modules/node-config/ascii/` | Git submodule ([github.com/georgenicoll/ascii](https://github.com/georgenicoll/ascii)), shared with wireguard-ap: the "monkey / nut / head" banner art. `./wgr` fetches it automatically if missing. |
 | `modules/platform/<cloud>/` | Creates a VM and opens two ports. Nothing else. All four expose an identical input/output interface. |
 | `stacks/<cloud>/` | ~40 lines wiring the two modules together, plus the provider block. |
 | `shared/variables_common.tf` | The cloud-agnostic input contract, symlinked into every stack. |
@@ -549,6 +550,14 @@ the server's WireGuard public key must stay the same, which it does as long as
 - A peer's `AllowedIPs` in `wg0.conf` is its own address plus, for a
   site-to-site gateway, the whole LAN subnet behind it — see
   [Two kinds of peer](#two-kinds-of-peer)
+
+**Login banner**
+- `/etc/motd` shows the router's own tunnel address, every peer's name and
+  address(es), and a reminder to run `sudo wg show all` to see live
+  connection status — no need to `wg show` or check `wireguard.generated.tfvars`
+  just to remember who's configured
+- System-wide, unlike wireguard-ap's per-user banner — this server has one
+  admin account, not several
 
 **Dynamic DNS**
 - Authenticates with a Dynu **API key** against their v2 REST API. The key is

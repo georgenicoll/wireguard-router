@@ -1,0 +1,3 @@
+[submodule "modules/node-config/ascii"]
+	path = modules/node-config/ascii
+	url = https://github.com/georgenicoll/ascii.git
