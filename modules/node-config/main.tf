@@ -41,6 +41,18 @@ locals {
   dynu_username_sh = replace(var.dynu_username, "'", "'\\''")
   dynu_password_sh = replace(var.dynu_password, "'", "'\\''")
 
+  # Login banner: the shared "monkeynuthead" part comes from the ascii
+  # submodule (github.com/georgenicoll/ascii); "Router" is specific to this
+  # project, so it stays local (templates/router.txt) rather than going into
+  # the shared submodule - same split as wireguard-ap's AP banner.
+  banner = "${file("${path.module}/ascii/monkeynuthead.txt")}${file("${path.module}/templates/router.txt")}"
+
+  motd = templatefile("${path.module}/templates/motd.tftpl", {
+    banner            = local.banner
+    wireguard_address = var.wireguard_address
+    peers             = var.wireguard_peers
+  })
+
   cloud_init = templatefile("${path.module}/templates/cloud-init.yaml.tftpl", {
     node_name         = var.node_name
     dynu_hostname     = var.dynu_hostname
@@ -61,5 +73,7 @@ locals {
     dynu_username_sh     = local.dynu_username_sh
     dynu_password_sh     = local.dynu_password_sh
     dynu_update_interval = var.dynu_update_interval
+
+    motd_b64 = base64encode(local.motd)
   })
 }

@@ -1,0 +1,15 @@
+${banner}
+
+Router IP: ${wireguard_address}
+%{ if length(peers) > 0 ~}
+
+Peers:
+%{ for p in peers ~}
+  - ${p.name}: ${join(", ", p.allowed_ips)}
+%{ endfor ~}
+%{ else ~}
+
+No peers configured yet - see scripts/wg-peer.sh.
+%{ endif ~}
+
+To monitor peers: sudo wg show all
