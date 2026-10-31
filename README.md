@@ -8,6 +8,25 @@ The server is designed to be disposable: destroy it, recreate it on a different
 provider, and your clients keep working because they connect to the dynamic
 hostname rather than an IP address.
 
+## Choosing a cloud
+
+Every command below is `./wgr <platform> <command>`; the platform is the only
+thing that changes. Each platform reads its own settings from
+`<platform>.tfvars`, placed next to your main config (copy the matching
+`<platform>.example.tfvars` there first):
+
+| Platform | `./wgr` word | Credentials | Must set in `<platform>.tfvars` | Default size |
+| --- | --- | --- | --- | --- |
+| AWS | `aws` | `AWS_PROFILE` / standard SDK env vars | nothing extra | `t4g.nano` (arm64) |
+| Azure | `azure` | `az login` | nothing extra (`azure_subscription_id` optional) | `Standard_B1ls` |
+| DigitalOcean | `digitalocean` | `export DIGITALOCEAN_TOKEN=...` | nothing extra | `s-1vcpu-512mb-10gb` |
+| GCP | `gcp` | `gcloud auth application-default login` | `gcp_project` | `e2-micro` |
+| Linode | `linode` | `export LINODE_TOKEN=...` | nothing extra | `g6-nanode-1` |
+
+On GCP, `gcp_zone` can stay empty: a random zone in `gcp_region` is picked for
+you. To move an existing server between providers, see
+[Switching cloud provider](#switching-cloud-provider).
+
 ## TL;DR: if the server and peers are already configured
 
 Your config files and key store already exist, so skip straight to
@@ -16,9 +35,7 @@ connect).
 
 ## TL;DR: setting up a new server and peers
 
-Start to finish, on Linode. Swap `linode` for `aws`, `gcp`, `azure` or
-`digitalocean` throughout; only the credentials and platform-specific file in
-step 3 actually differ.
+Start to finish, on Linode.
 
 **1. Install the tools.**
 
