@@ -17,10 +17,16 @@ variable "tags" {
 
 # --- GCP specific -----------------------------------------------------------
 
-variable "zone" {
-  description = "Zone to launch in. e2-micro is free-tier eligible only in us-west1, us-central1 and us-east1."
+variable "region" {
+  description = "Region to launch in. e2-micro is free-tier eligible only in us-west1, us-central1 and us-east1."
   type        = string
-  default     = "us-central1-a"
+  default     = "us-central1"
+}
+
+variable "zone" {
+  description = "Zone to launch in. Empty picks a random zone within `region` automatically."
+  type        = string
+  default     = ""
 }
 
 variable "machine_type" {

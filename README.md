@@ -8,6 +8,12 @@ The server is designed to be disposable: destroy it, recreate it on a different
 provider, and your clients keep working because they connect to the dynamic
 hostname rather than an IP address.
 
+## TL;DR: if the server and peers are already configured
+
+Your config files and key store already exist, so skip straight to
+[6. Create the server](#create-the-server) (then steps 7-8 to check and
+connect).
+
 ## TL;DR: setting up a new server and peers
 
 Start to finish, on Linode. Swap `linode` for `aws`, `gcp`, `azure` or
@@ -97,6 +103,7 @@ beside your config file. See
 what the store looks like, why the server key is never rotated by `add`, and
 how peers reach a router's LAN once one exists.
 
+<a id="create-the-server"></a>
 **6. Create the server.**
 
 ```bash
