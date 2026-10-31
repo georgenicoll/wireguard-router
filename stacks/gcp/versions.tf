@@ -11,6 +11,5 @@ terraform {
 
 provider "google" {
   project = var.gcp_project
-  region  = replace(var.gcp_zone, "/-[a-z]$/", "")
-  zone    = var.gcp_zone
+  region  = var.gcp_region
 }

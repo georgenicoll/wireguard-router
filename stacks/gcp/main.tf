@@ -40,6 +40,7 @@ module "server" {
   allow_icmp        = var.allow_icmp
   tags              = var.tags
 
+  region       = var.gcp_region
   zone         = var.gcp_zone
   machine_type = var.machine_type
   image        = var.image

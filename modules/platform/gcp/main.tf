@@ -1,17 +1,35 @@
+data "google_compute_zones" "available" {
+  count  = var.zone == "" ? 1 : 0
+  region = var.region
+}
+
+# Random rather than sort(...)[0]: e2-micro capacity shortages are per-zone
+# and transient, so a fixed pick can keep hitting the same short-on-capacity
+# zone. The result is stored in state and stays fixed across plain
+# re-applies; to retry with a different zone after a "does not have enough
+# resources available" error, destroy and re-apply.
+resource "random_shuffle" "zone" {
+  count        = var.zone == "" ? 1 : 0
+  input        = data.google_compute_zones.available[0].names
+  result_count = 1
+}
+
 locals {
+  zone = var.zone != "" ? var.zone : random_shuffle.zone[0].result[0]
+
   # Network tags are how GCP firewall rules select targets.
   network_tag = "${var.node_name}-wg"
 }
 
 resource "google_compute_address" "this" {
   name   = "${var.node_name}-ip"
-  region = replace(var.zone, "/-[a-z]$/", "")
+  region = var.region
 }
 
 resource "google_compute_instance" "this" {
   name         = var.node_name
   machine_type = var.machine_type
-  zone         = var.zone
+  zone         = local.zone
   tags         = [local.network_tag]
   labels       = var.tags
 
@@ -51,7 +69,9 @@ resource "google_compute_instance" "this" {
   }
 
   lifecycle {
-    ignore_changes = [boot_disk[0].initialize_params[0].image]
+    # zone: a later -replace of random_shuffle.zone (to retry a different
+    # zone) must not move an instance that's already running.
+    ignore_changes = [boot_disk[0].initialize_params[0].image, zone]
   }
 }
 
